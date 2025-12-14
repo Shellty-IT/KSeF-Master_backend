@@ -18,11 +18,11 @@ WORKDIR /app
 COPY --from=build /app/publish .
 
 # Render.com używa zmiennej PORT
-ENV ASPNETCORE_URLS=http://+:${PORT:-8080}
+ENV ASPNETCORE_URLS=http://+:${PORT:-10000}
 ENV ASPNETCORE_ENVIRONMENT=Production
 
 # Expose port
-EXPOSE 8080
+EXPOSE 10000
 
 # Start aplikacji
 ENTRYPOINT ["dotnet", "KSeF.Backend.dll"]

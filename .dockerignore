@@ -3,7 +3,5 @@
 **/.git
 **/.vs
 **/.idea
-**/node_modules/
 *.md
 .gitignore
-.dockerignore
