@@ -194,6 +194,18 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         EnsureAuthenticated();
         await _authService.RefreshTokenIfNeededAsync(ct);
 
+        // ===== WALIDACJA NIP SPRZEDAWCY =====
+        var sessionNip = _session.Nip;
+        if (!string.IsNullOrEmpty(sessionNip) && invoiceData.Seller.Nip != sessionNip)
+        {
+            _logger.LogWarning(
+                "⚠️ NIP sprzedawcy ({SellerNip}) różni się od NIP sesji ({SessionNip}). Automatycznie poprawiam!",
+                invoiceData.Seller.Nip, sessionNip);
+            
+            // Automatycznie popraw NIP sprzedawcy
+            invoiceData.Seller.Nip = sessionNip;
+        }
+
         // Upewnij się że jest otwarta sesja
         if (!_session.HasActiveOnlineSession)
         {
@@ -206,6 +218,9 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         {
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
             _logger.LogInformation("  WYSYŁANIE FAKTURY: {Number}", invoiceData.InvoiceNumber);
+            _logger.LogInformation("  NIP Sprzedawcy: {SellerNip}", invoiceData.Seller.Nip);
+            _logger.LogInformation("  NIP Nabywcy: {BuyerNip}", invoiceData.Buyer.Nip);
+            _logger.LogInformation("  NIP Sesji: {SessionNip}", sessionNip);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
             var client = CreateClient();
@@ -215,7 +230,15 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
             // Krok 1: Wygeneruj XML
             _logger.LogInformation("Krok 1: Generowanie XML faktury...");
-            var invoiceXml = _xmlGenerator.GenerateInvoiceXml(invoiceData);
+            var invoiceXml = _xmlGenerator.GenerateInvoiceXml(invoiceData, sessionNip);
+            
+            // Loguj wygenerowany XML (dla debugowania)
+            _logger.LogDebug("════════════════════════════════════════════════════════════════");
+            _logger.LogDebug("WYGENEROWANY XML:");
+            _logger.LogDebug("{Xml}", invoiceXml);
+            _logger.LogDebug("════════════════════════════════════════════════════════════════");
+            
+            // WAŻNE: UTF-8 bez BOM!
             var invoiceBytes = new UTF8Encoding(false).GetBytes(invoiceXml);
             _logger.LogInformation("  ✓ XML wygenerowany: {Size} bajtów", invoiceBytes.Length);
 
@@ -244,6 +267,9 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                 offlineMode = false
             };
 
+            // Loguj request body (dla debugowania)
+            _logger.LogDebug("Request body: {Body}", JsonSerializer.Serialize(requestBody, _jsonOptions));
+
             var url = $"sessions/online/{sessionRef}/invoices";
 
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -257,12 +283,19 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             var content = await response.Content.ReadAsStringAsync(ct);
 
             _logger.LogInformation("  Response: {Status}", response.StatusCode);
-            _logger.LogDebug("  Content: {Content}", content);
+            _logger.LogDebug("  Response Content: {Content}", content);
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError("  ✗ Błąd: {Content}", content);
-                return new SendInvoiceResult { Success = false, Error = content };
+                _logger.LogError("════════════════════════════════════════════════════════════════");
+                _logger.LogError("  ✗ BŁĄD WYSYŁKI FAKTURY!");
+                _logger.LogError("  Status: {Status}", response.StatusCode);
+                _logger.LogError("  Response: {Content}", content);
+                _logger.LogError("════════════════════════════════════════════════════════════════");
+                
+                // Spróbuj sparsować błąd KSeF
+                var errorMessage = ParseKsefError(content) ?? content;
+                return new SendInvoiceResult { Success = false, Error = errorMessage };
             }
 
             var sendResponse = JsonSerializer.Deserialize<SendInvoiceApiResponse>(content, _jsonOptions);
@@ -271,6 +304,7 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             _logger.LogInformation("  ✅ FAKTURA WYSŁANA!");
             _logger.LogInformation("  ElementReferenceNumber: {Ref}", sendResponse?.ElementReferenceNumber);
             _logger.LogInformation("  ProcessingCode: {Code}", sendResponse?.ProcessingCode);
+            _logger.LogInformation("  ProcessingDescription: {Desc}", sendResponse?.ProcessingDescription);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
             return new SendInvoiceResult
@@ -285,6 +319,100 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         {
             _logger.LogError(ex, "Błąd wysyłania faktury");
             return new SendInvoiceResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Próbuje wyciągnąć czytelny komunikat błędu z odpowiedzi KSeF
+    /// </summary>
+    private string? ParseKsefError(string responseContent)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(responseContent);
+            var root = doc.RootElement;
+
+            // Próbuj różne formaty błędów KSeF
+            if (root.TryGetProperty("exception", out var exception))
+            {
+                if (exception.TryGetProperty("exceptionDetailList", out var details) && 
+                    details.ValueKind == JsonValueKind.Array &&
+                    details.GetArrayLength() > 0)
+                {
+                    var firstDetail = details[0];
+                    if (firstDetail.TryGetProperty("exceptionDescription", out var desc))
+                    {
+                        return desc.GetString();
+                    }
+                }
+                
+                if (exception.TryGetProperty("serviceCtx", out var ctx))
+                {
+                    return ctx.GetString();
+                }
+            }
+
+            if (root.TryGetProperty("message", out var message))
+            {
+                return message.GetString();
+            }
+
+            if (root.TryGetProperty("error", out var error))
+            {
+                return error.GetString();
+            }
+        }
+        catch
+        {
+            // Ignoruj błędy parsowania
+        }
+
+        return null;
+    }
+
+    #endregion
+
+    #region Close Session
+
+    public async Task<bool> CloseOnlineSessionAsync(CancellationToken ct = default)
+    {
+        if (!_session.HasActiveOnlineSession)
+        {
+            _logger.LogInformation("Brak aktywnej sesji do zamknięcia");
+            return true;
+        }
+
+        try
+        {
+            var client = CreateClient();
+            var sessionRef = _session.SessionReferenceNumber!;
+
+            _logger.LogInformation("Zamykanie sesji: {Ref}", sessionRef);
+
+            using var request = new HttpRequestMessage(HttpMethod.Delete, $"sessions/online/{sessionRef}");
+            request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
+
+            var response = await client.SendAsync(request, ct);
+
+            _session.ClearOnlineSession();
+
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("  ✓ Sesja zamknięta");
+                return true;
+            }
+            else
+            {
+                var content = await response.Content.ReadAsStringAsync(ct);
+                _logger.LogWarning("  ⚠ Błąd zamykania sesji: {Status} - {Content}", response.StatusCode, content);
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Błąd zamykania sesji");
+            _session.ClearOnlineSession();
+            return false;
         }
     }
 

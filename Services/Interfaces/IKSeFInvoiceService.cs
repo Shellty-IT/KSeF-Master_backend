@@ -20,4 +20,9 @@ public interface IKSeFInvoiceService
     /// Wysyła fakturę - generuje XML na podstawie danych, szyfruje i wysyła
     /// </summary>
     Task<SendInvoiceResult> SendInvoiceAsync(CreateInvoiceRequest invoiceData, CancellationToken ct = default);
+
+    /// <summary>
+    /// Zamyka sesję interaktywną
+    /// </summary>
+    Task<bool> CloseOnlineSessionAsync(CancellationToken ct = default);
 }
