@@ -19,8 +19,6 @@ public class InvoiceXmlGenerator
     /// <summary>
     /// Generuje XML faktury zgodny ze schematem FA(3) v1-0E
     /// </summary>
-    /// <param name="invoice">Dane faktury</param>
-    /// <param name="sessionNip">NIP z sesji KSeF (opcjonalnie - do walidacji)</param>
     public string GenerateInvoiceXml(CreateInvoiceRequest invoice, string? sessionNip = null)
     {
         _logger.LogInformation("Generowanie XML faktury: {Number}", invoice.InvoiceNumber);
@@ -65,10 +63,12 @@ public class InvoiceXmlGenerator
         sb.Append("<Adres>");
         sb.Append($"<KodKraju>{EscapeXml(invoice.Seller.CountryCode)}</KodKraju>");
         sb.Append($"<AdresL1>{EscapeXml(invoice.Seller.AddressLine1)}</AdresL1>");
-        sb.Append($"<AdresL2>{EscapeXml(invoice.Seller.AddressLine2 ?? "")}</AdresL2>");
-        sb.Append("<GLN>2</GLN>"); // 2 = nie dotyczy
+        // AdresL2 - tylko jeśli nie pusty
+        var sellerAdresL2 = GetAddressLine2(invoice.Seller.AddressLine1, invoice.Seller.AddressLine2);
+        sb.Append($"<AdresL2>{EscapeXml(sellerAdresL2)}</AdresL2>");
+        sb.Append("<GLN>2</GLN>");
         sb.Append("</Adres>");
-        sb.Append("<StatusInfoPodatnika>3</StatusInfoPodatnika>"); // 3 = podatnik VAT czynny
+        sb.Append("<StatusInfoPodatnika>3</StatusInfoPodatnika>");
         sb.Append("</Podmiot1>");
 
         // === PODMIOT 2 (NABYWCA) ===
@@ -80,10 +80,11 @@ public class InvoiceXmlGenerator
         sb.Append("<Adres>");
         sb.Append($"<KodKraju>{EscapeXml(invoice.Buyer.CountryCode)}</KodKraju>");
         sb.Append($"<AdresL1>{EscapeXml(invoice.Buyer.AddressLine1)}</AdresL1>");
-        sb.Append($"<AdresL2>{EscapeXml(invoice.Buyer.AddressLine2 ?? "")}</AdresL2>");
+        var buyerAdresL2 = GetAddressLine2(invoice.Buyer.AddressLine1, invoice.Buyer.AddressLine2);
+        sb.Append($"<AdresL2>{EscapeXml(buyerAdresL2)}</AdresL2>");
         sb.Append("</Adres>");
-        sb.Append("<JST>2</JST>"); // 2 = nie jest JST
-        sb.Append("<GV>2</GV>");   // 2 = nie jest członkiem grupy VAT
+        sb.Append("<JST>2</JST>");
+        sb.Append("<GV>2</GV>");
         sb.Append("</Podmiot2>");
 
         // === FA (DANE FAKTURY) ===
@@ -112,19 +113,19 @@ public class InvoiceXmlGenerator
 
         // === ADNOTACJE (wymagane) ===
         sb.Append("<Adnotacje>");
-        sb.Append("<P_16>2</P_16>");   // Metoda kasowa: 2 = NIE
-        sb.Append("<P_17>2</P_17>");   // Samofakturowanie: 2 = NIE
-        sb.Append("<P_18>1</P_18>");   // Odwrotne obciążenie: 1 = nie dotyczy
-        sb.Append("<P_18A>2</P_18A>"); // MPP: 2 = NIE
+        sb.Append("<P_16>2</P_16>");
+        sb.Append("<P_17>2</P_17>");
+        sb.Append("<P_18>1</P_18>");
+        sb.Append("<P_18A>2</P_18A>");
         sb.Append("<Zwolnienie>");
-        sb.Append("<P_19N>1</P_19N>"); // Zwolnienie: 1 = NIE DOTYCZY
+        sb.Append("<P_19N>1</P_19N>");
         sb.Append("</Zwolnienie>");
         sb.Append("<NoweSrodkiTransportu>");
-        sb.Append("<P_22N>1</P_22N>"); // Nowe środki transportu: 1 = NIE DOTYCZY
+        sb.Append("<P_22N>1</P_22N>");
         sb.Append("</NoweSrodkiTransportu>");
-        sb.Append("<P_23>1</P_23>");   // WDT: 1 = NIE
+        sb.Append("<P_23>1</P_23>");
         sb.Append("<PMarzy>");
-        sb.Append("<P_PMarzyN>1</P_PMarzyN>"); // Marża: 1 = NIE DOTYCZY
+        sb.Append("<P_PMarzyN>1</P_PMarzyN>");
         sb.Append("</PMarzy>");
         sb.Append("</Adnotacje>");
 
@@ -139,12 +140,12 @@ public class InvoiceXmlGenerator
 
             sb.Append("<FaWiersz>");
             sb.Append($"<NrWierszaFa>{lineNumber++}</NrWierszaFa>");
-            sb.Append($"<P_7>{EscapeXml(item.Name)}</P_7>");                // Nazwa towaru/usługi
-            sb.Append($"<P_8A>{EscapeXml(item.Unit)}</P_8A>");              // Jednostka miary
-            sb.Append($"<P_8B>{FormatQuantity(item.Quantity)}</P_8B>");     // Ilość
-            sb.Append($"<P_9A>{FormatAmount(item.UnitPriceNet)}</P_9A>");   // Cena jednostkowa netto
-            sb.Append($"<P_11>{FormatAmount(netValue)}</P_11>");            // Wartość netto pozycji
-            sb.Append($"<P_12>{FormatVatRate(item.VatRate)}</P_12>");       // Stawka VAT
+            sb.Append($"<P_7>{EscapeXml(item.Name)}</P_7>");
+            sb.Append($"<P_8A>{EscapeXml(item.Unit)}</P_8A>");
+            sb.Append($"<P_8B>{FormatQuantity(item.Quantity)}</P_8B>");
+            sb.Append($"<P_9A>{FormatAmount(item.UnitPriceNet)}</P_9A>");
+            sb.Append($"<P_11>{FormatAmount(netValue)}</P_11>");
+            sb.Append($"<P_12>{FormatVatRate(item.VatRate)}</P_12>");
             sb.Append("</FaWiersz>");
         }
 
@@ -158,18 +159,31 @@ public class InvoiceXmlGenerator
         return xml;
     }
 
+    #region Address Helper
+
+    /// <summary>
+    /// Zwraca AdresL2 - jeśli pusty, generuje placeholder na podstawie AdresL1
+    /// lub zwraca "-" jako minimalną wartość
+    /// </summary>
+    private string GetAddressLine2(string addressLine1, string? addressLine2)
+    {
+        // Jeśli AdresL2 ma wartość, użyj jej
+        if (!string.IsNullOrWhiteSpace(addressLine2))
+        {
+            return addressLine2;
+        }
+
+        // Jeśli AdresL1 zawiera kod pocztowy i miasto, możemy to wydzielić
+        // Na razie zwracamy placeholder
+        return "-";
+    }
+
+    #endregion
+
     #region VAT Summary
 
     private void AppendVatSummary(StringBuilder sb, InvoiceTotals totals)
     {
-        // WAŻNE: Kolejność zgodna ze schematem XSD!
-        // P_13_1, P_14_1 (23%)
-        // P_13_2, P_14_2 (8%)
-        // P_13_3, P_14_3 (5%)
-        // P_13_6 (0%)
-        // P_13_7 (zw)
-        // P_13_10 (np)
-
         // 23%
         if (totals.ByVatRate.TryGetValue("23", out var vat23))
         {
@@ -177,7 +191,7 @@ public class InvoiceXmlGenerator
             sb.Append($"<P_14_1>{FormatAmount(vat23.Vat)}</P_14_1>");
         }
 
-        // 22% (stara stawka - mapuj na pole 23%)
+        // 22%
         if (totals.ByVatRate.TryGetValue("22", out var vat22) && !totals.ByVatRate.ContainsKey("23"))
         {
             sb.Append($"<P_13_1>{FormatAmount(vat22.Net)}</P_13_1>");
@@ -191,7 +205,7 @@ public class InvoiceXmlGenerator
             sb.Append($"<P_14_2>{FormatAmount(vat8.Vat)}</P_14_2>");
         }
 
-        // 7% (stara stawka - mapuj na pole 8%)
+        // 7%
         if (totals.ByVatRate.TryGetValue("7", out var vat7) && !totals.ByVatRate.ContainsKey("8"))
         {
             sb.Append($"<P_13_2>{FormatAmount(vat7.Net)}</P_13_2>");
@@ -209,16 +223,15 @@ public class InvoiceXmlGenerator
         if (totals.ByVatRate.TryGetValue("0", out var vat0))
         {
             sb.Append($"<P_13_6>{FormatAmount(vat0.Net)}</P_13_6>");
-            // Brak P_14_6 - VAT = 0
         }
 
-        // ZW (zwolnione)
+        // ZW
         if (totals.ByVatRate.TryGetValue("zw", out var vatZw))
         {
             sb.Append($"<P_13_7>{FormatAmount(vatZw.Net)}</P_13_7>");
         }
 
-        // NP (nie podlega)
+        // NP
         if (totals.ByVatRate.TryGetValue("np", out var vatNp))
         {
             sb.Append($"<P_13_10>{FormatAmount(vatNp.Net)}</P_13_10>");
@@ -243,7 +256,6 @@ public class InvoiceXmlGenerator
             totals.VatTotal += vatValue;
             totals.GrossTotal += netValue + vatValue;
 
-            // Grupuj według stawek (lowercase dla spójności)
             var key = NormalizeVatRateKey(item.VatRate);
             if (!totals.ByVatRate.ContainsKey(key))
                 totals.ByVatRate[key] = (0, 0);
@@ -252,7 +264,6 @@ public class InvoiceXmlGenerator
             totals.ByVatRate[key] = (net + netValue, vat + vatValue);
         }
 
-        // Zaokrąglij sumy końcowe
         totals.NetTotal = Math.Round(totals.NetTotal, 2);
         totals.VatTotal = Math.Round(totals.VatTotal, 2);
         totals.GrossTotal = Math.Round(totals.GrossTotal, 2);
@@ -273,7 +284,7 @@ public class InvoiceXmlGenerator
             "0" => 0m,
             "zw" => 0m,
             "np" => 0m,
-            "oo" => 0m, // odwrotne obciążenie
+            "oo" => 0m,
             _ => decimal.TryParse(vatRate, out var rate) ? rate : 23m
         };
     }
@@ -281,12 +292,11 @@ public class InvoiceXmlGenerator
     private string NormalizeVatRateKey(string vatRate)
     {
         var normalized = vatRate.Trim().ToLowerInvariant();
-        // Upewnij się że liczbowe stawki nie mają zer wiodących itp.
         if (decimal.TryParse(normalized, out var numRate))
         {
             return ((int)numRate).ToString();
         }
-        return normalized; // "zw", "np", "oo"
+        return normalized;
     }
 
     #endregion
@@ -311,37 +321,22 @@ public class InvoiceXmlGenerator
         };
     }
 
-    /// <summary>
-    /// Formatuje kwotę - bez zbędnych zer dziesiętnych
-    /// 1000.00 -> "1000"
-    /// 1000.50 -> "1000.5"
-    /// 1000.55 -> "1000.55"
-    /// </summary>
     private string FormatAmount(decimal value)
     {
-        // Zaokrąglij do 2 miejsc
         value = Math.Round(value, 2);
-
-        // Sprawdź czy jest liczbą całkowitą
         if (value == Math.Floor(value))
         {
             return ((long)value).ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
-
-        // Formatuj z max 2 miejscami, usuwając końcowe zera
         return value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    /// <summary>
-    /// Formatuje ilość - może mieć więcej miejsc dziesiętnych
-    /// </summary>
     private string FormatQuantity(decimal value)
     {
         if (value == Math.Floor(value))
         {
             return ((long)value).ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
-        // Max 6 miejsc dziesiętnych, bez końcowych zer
         return value.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
     }
 
