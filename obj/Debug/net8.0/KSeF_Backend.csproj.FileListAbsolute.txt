@@ -1,6 +1,5 @@
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\appsettings.Development.json
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\appsettings.json
-C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\global.json
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\KSeF_Backend.exe
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\KSeF_Backend.deps.json
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\KSeF_Backend.runtimeconfig.json
@@ -20,11 +19,6 @@ C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\KSeF_Backend.MvcAp
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\KSeF_Backend.sourcelink.json
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets.build.json
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets.development.json
-C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets\msbuild.KSeF_Backend.Microsoft.AspNetCore.StaticWebAssets.props
-C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets\msbuild.build.KSeF_Backend.props
-C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets\msbuild.buildMultiTargeting.KSeF_Backend.props
-C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets\msbuild.buildTransitive.KSeF_Backend.props
-C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets.pack.json
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\scopedcss\bundle\KSeF_Backend.styles.css
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\KSeF_Bac.1D3A12B6.Up2Date
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\KSeF_Backend.dll
@@ -32,3 +26,11 @@ C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\refint\KSeF_Backen
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\KSeF_Backend.pdb
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\KSeF_Backend.genruntimeconfig.cache
 C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\ref\KSeF_Backend.dll
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\bin\Debug\net8.0\KSeF_Backend.staticwebassets.endpoints.json
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\rpswa.dswa.cache.json
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\rjimswa.dswa.cache.json
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\rjsmrazor.dswa.cache.json
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\rjsmcshtml.dswa.cache.json
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets.build.json.cache
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\staticwebassets.build.endpoints.json
+C:\Users\Tomek\Desktop\Projekty\KSeF_Backend\obj\Debug\net8.0\swae.build.ex.cache

@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="..\build\KSeF_Backend.props" />
-</Project>
