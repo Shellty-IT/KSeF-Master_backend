@@ -54,6 +54,12 @@ public class CreateInvoiceRequest
     /// </summary>
     [JsonPropertyName("issuePlace")]
     public string? IssuePlace { get; set; }
+
+    /// <summary>
+    /// Dane płatności
+    /// </summary>
+    [JsonPropertyName("payment")]
+    public PaymentData? Payment { get; set; }
 }
 
 public class PartyData
@@ -105,4 +111,28 @@ public class InvoiceItem
     /// </summary>
     [JsonPropertyName("vatRate")]
     public string VatRate { get; set; } = "23";
+}
+
+/// <summary>
+/// Dane płatności
+/// </summary>
+public class PaymentData
+{
+    /// <summary>
+    /// Metoda płatności: "przelew", "gotówka"
+    /// </summary>
+    [JsonPropertyName("method")]
+    public string Method { get; set; } = "przelew";
+
+    /// <summary>
+    /// Termin płatności (YYYY-MM-DD)
+    /// </summary>
+    [JsonPropertyName("dueDate")]
+    public string? DueDate { get; set; }
+
+    /// <summary>
+    /// Numer rachunku bankowego (26 cyfr)
+    /// </summary>
+    [JsonPropertyName("bankAccount")]
+    public string? BankAccount { get; set; }
 }
