@@ -230,6 +230,52 @@ public class SendInvoiceApiResponse
     public DateTime? Timestamp { get; set; }
 }
 
+// ============ Invoice Details (do pobierania z KSeF) ============
+public class InvoiceDetailsResponse
+{
+    [JsonPropertyName("timestamp")]
+    public DateTime? Timestamp { get; set; }
+
+    [JsonPropertyName("invoiceHash")]
+    public InvoiceHashInfo? InvoiceHash { get; set; }
+
+    [JsonPropertyName("invoicePayload")]
+    public InvoicePayloadInfo? InvoicePayload { get; set; }
+
+    [JsonPropertyName("ksefReferenceNumber")]
+    public string? KsefReferenceNumber { get; set; }
+}
+
+public class InvoiceHashInfo
+{
+    [JsonPropertyName("hashSHA")]
+    public HashShaInfo? HashSHA { get; set; }
+
+    [JsonPropertyName("fileSize")]
+    public int? FileSize { get; set; }
+}
+
+public class HashShaInfo
+{
+    [JsonPropertyName("algorithm")]
+    public string? Algorithm { get; set; }
+
+    [JsonPropertyName("encoding")]
+    public string? Encoding { get; set; }
+
+    [JsonPropertyName("value")]
+    public string? Value { get; set; }
+}
+
+public class InvoicePayloadInfo
+{
+    [JsonPropertyName("payloadType")]
+    public string? PayloadType { get; set; }
+
+    [JsonPropertyName("invoiceBody")]
+    public string? InvoiceBody { get; set; }
+}
+
 // ============ Backend Result Wrappers ============
 public class AuthResult
 {
@@ -255,4 +301,39 @@ public class SendInvoiceResult
     public string? ElementReferenceNumber { get; set; }
     public string? ProcessingDescription { get; set; }
     public int? ProcessingCode { get; set; }
+    public string? InvoiceHash { get; set; }
+}
+
+// ============ Invoice Details Result ============
+public class InvoiceDetailsResult
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string? InvoiceHash { get; set; }
+    public string? InvoiceXml { get; set; }
+    public string? KsefNumber { get; set; }
+    public string? InvoiceNumber { get; set; }
+    public string? IssueDate { get; set; }
+    public string? SellerNip { get; set; }
+    public string? SellerName { get; set; }
+    public string? SellerAddress { get; set; }
+    public string? BuyerNip { get; set; }
+    public string? BuyerName { get; set; }
+    public string? BuyerAddress { get; set; }
+    public decimal NetTotal { get; set; }
+    public decimal VatTotal { get; set; }
+    public decimal GrossTotal { get; set; }
+    public List<InvoiceItemResult>? Items { get; set; }
+}
+
+public class InvoiceItemResult
+{
+    public string Name { get; set; } = string.Empty;
+    public string Unit { get; set; } = "szt.";
+    public decimal Quantity { get; set; }
+    public decimal UnitPriceNet { get; set; }
+    public string VatRate { get; set; } = "23";
+    public decimal NetValue { get; set; }
+    public decimal VatValue { get; set; }
+    public decimal GrossValue { get; set; }
 }

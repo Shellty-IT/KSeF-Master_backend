@@ -25,4 +25,9 @@ public interface IKSeFInvoiceService
     /// Zamyka sesję interaktywną
     /// </summary>
     Task<bool> CloseOnlineSessionAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Pobiera szczegóły faktury z KSeF (XML + hash)
+    /// </summary>
+    Task<InvoiceDetailsResult> GetInvoiceDetailsAsync(string ksefNumber, CancellationToken ct = default);
 }

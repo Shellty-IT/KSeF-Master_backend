@@ -51,22 +51,7 @@ public class KSeFController : ControllerBase
     // ═══════════════════════════════════════════════════════════════
     // LOGOWANIE / WYLOGOWANIE
     // ═══════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Logowanie do KSeF
-    /// </summary>
-    /// <remarks>
-    /// Użytkownik podaje NIP i Token KSeF wygenerowany w oficjalnej aplikacji.
-    /// Backend wykonuje pełny flow uwierzytelniania i zapisuje sesję.
-    /// 
-    /// Przykład:
-    /// ```json
-    /// {
-    ///     "nip": "5252161248",
-    ///     "ksefToken": "20251210-EC-4FAFC0A000-554D466CBC-4F|nip-5252161248|hash..."
-    /// }
-    /// ```
-    /// </remarks>
+    
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
@@ -126,10 +111,7 @@ public class KSeFController : ControllerBase
             });
         }
     }
-
-    /// <summary>
-    /// Wylogowanie z KSeF
-    /// </summary>
+    
     [HttpPost("logout")]
     public IActionResult Logout()
     {
@@ -148,29 +130,7 @@ public class KSeFController : ControllerBase
     // ═══════════════════════════════════════════════════════════════
     // FAKTURY - POBIERANIE
     // ═══════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Pobierz listę faktur
-    /// </summary>
-    /// <remarks>
-    /// Wymaga zalogowania. Zwraca faktury w podanym zakresie dat.
-    /// 
-    /// Przykład:
-    /// ```json
-    /// {
-    ///     "subjectType": "Subject1",
-    ///     "dateRange": {
-    ///         "dateType": "PermanentStorage",
-    ///         "from": "2025-11-01T00:00:00Z",
-    ///         "to": "2025-12-31T23:59:59Z"
-    ///     }
-    /// }
-    /// ```
-    /// 
-    /// SubjectType:
-    /// - Subject1 = faktury wystawione (sprzedaż)
-    /// - Subject2 = faktury otrzymane (zakupy)
-    /// </remarks>
+    
     [HttpPost("invoices")]
     public async Task<IActionResult> GetInvoices([FromBody] InvoiceQueryRequest request, CancellationToken ct)
     {
@@ -209,16 +169,7 @@ public class KSeFController : ControllerBase
     // ═══════════════════════════════════════════════════════════════
     // FAKTURY - WYSYŁANIE
     // ═══════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Otwórz sesję do wysyłki faktur
-    /// </summary>
-    /// <remarks>
-    /// Wymaga zalogowania. Tworzy sesję interaktywną w KSeF.
-    /// Jeśli sesja już istnieje i jest ważna, zwraca jej dane.
-    /// 
-    /// Sesja jest wymagana do wysyłania faktur.
-    /// </remarks>
+    
     [HttpPost("session/open")]
     public async Task<IActionResult> OpenSession(CancellationToken ct)
     {
@@ -258,10 +209,7 @@ public class KSeFController : ControllerBase
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
-
-    /// <summary>
-    /// Zamknij sesję wysyłkową
-    /// </summary>
+    
     [HttpPost("session/close")]
     public IActionResult CloseSession()
     {
@@ -273,45 +221,7 @@ public class KSeFController : ControllerBase
             message = "Sesja wysyłkowa zamknięta"
         });
     }
-
-    /// <summary>
-    /// Wyślij fakturę do KSeF
-    /// </summary>
-    /// <remarks>
-    /// Wymaga zalogowania. Backend automatycznie:
-    /// 1. Otwiera sesję jeśli nie istnieje
-    /// 2. Generuje XML faktury na podstawie przekazanych danych
-    /// 3. Szyfruje fakturę (AES-256-CBC)
-    /// 4. Wysyła do KSeF
-    /// 
-    /// Przykład minimalny:
-    /// ```json
-    /// {
-    ///     "invoiceNumber": "FV/2025/001",
-    ///     "issueDate": "2025-12-13",
-    ///     "saleDate": "2025-12-13",
-    ///     "seller": {
-    ///         "nip": "5252161248",
-    ///         "name": "Firma Sprzedawcy Sp. z o.o.",
-    ///         "addressLine1": "ul. Testowa 1, 00-001 Warszawa"
-    ///     },
-    ///     "buyer": {
-    ///         "nip": "8521021463",
-    ///         "name": "Firma Nabywcy S.A.",
-    ///         "addressLine1": "ul. Przykładowa 2, 00-002 Warszawa"
-    ///     },
-    ///     "items": [
-    ///         {
-    ///             "name": "Usługa programistyczna",
-    ///             "unit": "godz.",
-    ///             "quantity": 10,
-    ///             "unitPriceNet": 150.00,
-    ///             "vatRate": "23"
-    ///         }
-    ///     ]
-    /// }
-    /// ```
-    /// </remarks>
+    
     [HttpPost("invoice/send")]
     public async Task<IActionResult> SendInvoice([FromBody] CreateInvoiceRequest request, CancellationToken ct)
     {
@@ -365,7 +275,85 @@ public class KSeFController : ControllerBase
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
+    
+    
+// ═══════════════════════════════════════════════════════════════
+// PDF
+// ═══════════════════════════════════════════════════════════════  
+    /// <summary>
+    /// Generuje PDF faktury
+    /// </summary>
+    [HttpPost("invoice/pdf")]
+    public IActionResult GeneratePdf(
+        [FromBody] GeneratePdfRequest request,
+        [FromServices] IPdfGeneratorService pdfService)
+    {
+        _logger.LogInformation("=== GENERATE PDF REQUEST ===");
+        _logger.LogInformation("InvoiceNumber: {Number}, Hash: {Hash}", request.InvoiceNumber, request.InvoiceHash);
 
+        try
+        {
+            if (string.IsNullOrEmpty(request.InvoiceHash))
+            {
+                return BadRequest(new { success = false, error = "Hash faktury jest wymagany do wygenerowania linku weryfikacyjnego" });
+            }
+
+            var pdfBytes = pdfService.GeneratePdf(request);
+            var fileName = SanitizeFileName(request.InvoiceNumber ?? "faktura") + ".pdf";
+
+            return File(pdfBytes, "application/pdf", fileName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Błąd generowania PDF");
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
+    private string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return string.Join("-", name.Split(invalid, StringSplitOptions.RemoveEmptyEntries));
+    }
+    
+// ═══════════════════════════════════════════════════════════════
+// SZCZEGÓŁY FAKTURY
+// ═══════════════════════════════════════════════════════════════
+
+/// <summary>
+/// Pobiera szczegóły faktury z KSeF
+/// </summary>
+[HttpGet("invoice/{ksefNumber}")]
+public async Task<IActionResult> GetInvoiceDetails(string ksefNumber, CancellationToken ct)
+{
+    _logger.LogInformation("=== GET INVOICE DETAILS: {KsefNumber} ===", ksefNumber);
+
+    try
+    {
+        var result = await _invoiceService.GetInvoiceDetailsAsync(ksefNumber, ct);
+
+        if (!result.Success)
+        {
+            return BadRequest(new { success = false, error = result.Error });
+        }
+
+        return Ok(new
+        {
+            success = true,
+            data = result
+        });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Unauthorized(new { success = false, error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Błąd pobierania szczegółów faktury");
+        return BadRequest(new { success = false, error = ex.Message });
+    }
+}
+    
     // ═══════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════

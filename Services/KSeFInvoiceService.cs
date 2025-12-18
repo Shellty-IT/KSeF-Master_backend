@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Models.Responses;
 using KSeF.Backend.Services.Interfaces;
@@ -74,6 +75,205 @@ public class KSeFInvoiceService : IKSeFInvoiceService
     }
 
     #endregion
+
+    public async Task<InvoiceDetailsResult> GetInvoiceDetailsAsync(string ksefNumber, CancellationToken ct = default)
+    {
+        EnsureAuthenticated();
+        await _authService.RefreshTokenIfNeededAsync(ct);
+
+        _logger.LogInformation("Pobieranie szczegółów faktury: {KsefNumber}", ksefNumber);
+
+        try
+        {
+            var client = CreateClient();
+
+            // Endpoint do pobierania faktury - próbujemy różne warianty
+            var endpoints = new[]
+            {
+                $"online/Invoice/Get/{ksefNumber}",
+                $"invoices/{ksefNumber}",
+                $"online/invoices/{ksefNumber}"
+            };
+
+            HttpResponseMessage? response = null;
+            string? content = null;
+
+            foreach (var endpoint in endpoints)
+            {
+                _logger.LogDebug("Próbuję endpoint: {Endpoint}", endpoint);
+                
+                using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+                request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
+
+                response = await client.SendAsync(request, ct);
+                content = await response.Content.ReadAsStringAsync(ct);
+
+                _logger.LogDebug("Endpoint {Endpoint} - Status: {Status}", endpoint, response.StatusCode);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("Sukces z endpoint: {Endpoint}", endpoint);
+                    break;
+                }
+            }
+
+            if (response == null || !response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Błąd pobierania faktury ze wszystkich endpointów. Ostatni status: {Status}", 
+                    response?.StatusCode);
+                return new InvoiceDetailsResult 
+                { 
+                    Success = false, 
+                    Error = $"Nie można pobrać faktury z KSeF: {response?.StatusCode}" 
+                };
+            }
+
+            _logger.LogDebug("Response content: {Content}", content?.Substring(0, Math.Min(500, content?.Length ?? 0)));
+
+            var detailsResponse = JsonSerializer.Deserialize<InvoiceDetailsResponse>(content!, _jsonOptions);
+            
+            if (detailsResponse == null)
+            {
+                return new InvoiceDetailsResult { Success = false, Error = "Pusta odpowiedź z KSeF" };
+            }
+
+            // Wyciągnij hash
+            var invoiceHash = detailsResponse.InvoiceHash?.HashSHA?.Value ?? "";
+            
+            // Wyciągnij i zdekoduj XML
+            var invoiceXml = DecodeInvoiceBody(detailsResponse.InvoicePayload?.InvoiceBody);
+            
+            if (string.IsNullOrEmpty(invoiceXml))
+            {
+                return new InvoiceDetailsResult { Success = false, Error = "Brak XML faktury w odpowiedzi" };
+            }
+
+            // Parsuj XML
+            var result = ParseInvoiceXml(invoiceXml, ksefNumber, invoiceHash);
+            result.Success = true;
+            
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Błąd pobierania szczegółów faktury");
+            return new InvoiceDetailsResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    private string? DecodeInvoiceBody(string? invoiceBody)
+    {
+        if (string.IsNullOrEmpty(invoiceBody))
+            return null;
+
+        try
+        {
+            // Próbuj zdekodować Base64
+            var bytes = Convert.FromBase64String(invoiceBody);
+            return Encoding.UTF8.GetString(bytes);
+        }
+        catch
+        {
+            // Już jest stringiem XML
+            return invoiceBody;
+        }
+    }
+
+    private InvoiceDetailsResult ParseInvoiceXml(string xml, string ksefNumber, string invoiceHash)
+    {
+        var doc = XDocument.Parse(xml);
+        var ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
+
+        var result = new InvoiceDetailsResult
+        {
+            KsefNumber = ksefNumber,
+            InvoiceHash = invoiceHash,
+            InvoiceXml = xml,
+            InvoiceNumber = doc.Descendants(ns + "P_2").FirstOrDefault()?.Value,
+            IssueDate = doc.Descendants(ns + "P_1").FirstOrDefault()?.Value,
+            Items = new List<InvoiceItemResult>()
+        };
+
+        // Sprzedawca (Podmiot1)
+        var podmiot1 = doc.Descendants(ns + "Podmiot1").FirstOrDefault();
+        if (podmiot1 != null)
+        {
+            var dane1 = podmiot1.Descendants(ns + "DaneIdentyfikacyjne").FirstOrDefault();
+            var adres1 = podmiot1.Descendants(ns + "Adres").FirstOrDefault();
+            result.SellerNip = dane1?.Element(ns + "NIP")?.Value;
+            result.SellerName = dane1?.Element(ns + "Nazwa")?.Value;
+            result.SellerAddress = adres1?.Element(ns + "AdresL1")?.Value;
+        }
+
+        // Nabywca (Podmiot2)
+        var podmiot2 = doc.Descendants(ns + "Podmiot2").FirstOrDefault();
+        if (podmiot2 != null)
+        {
+            var dane2 = podmiot2.Descendants(ns + "DaneIdentyfikacyjne").FirstOrDefault();
+            var adres2 = podmiot2.Descendants(ns + "Adres").FirstOrDefault();
+            result.BuyerNip = dane2?.Element(ns + "NIP")?.Value;
+            result.BuyerName = dane2?.Element(ns + "Nazwa")?.Value;
+            result.BuyerAddress = adres2?.Element(ns + "AdresL1")?.Value;
+        }
+
+        // Pozycje
+        var wiersze = doc.Descendants(ns + "FaWiersz");
+        foreach (var wiersz in wiersze)
+        {
+            decimal.TryParse(wiersz.Element(ns + "P_8B")?.Value, System.Globalization.NumberStyles.Any, 
+                System.Globalization.CultureInfo.InvariantCulture, out var qty);
+            decimal.TryParse(wiersz.Element(ns + "P_9A")?.Value, System.Globalization.NumberStyles.Any, 
+                System.Globalization.CultureInfo.InvariantCulture, out var price);
+            decimal.TryParse(wiersz.Element(ns + "P_11")?.Value, System.Globalization.NumberStyles.Any, 
+                System.Globalization.CultureInfo.InvariantCulture, out var netValue);
+            var vatRate = wiersz.Element(ns + "P_12")?.Value ?? "23";
+            
+            var vatValue = CalculateVatFromRate(netValue, vatRate);
+
+            result.Items.Add(new InvoiceItemResult
+            {
+                Name = wiersz.Element(ns + "P_7")?.Value ?? "",
+                Unit = wiersz.Element(ns + "P_8A")?.Value ?? "szt.",
+                Quantity = qty > 0 ? qty : 1,
+                UnitPriceNet = price,
+                VatRate = vatRate,
+                NetValue = netValue,
+                VatValue = vatValue,
+                GrossValue = netValue + vatValue
+            });
+        }
+
+        // Sumy
+        var fa = doc.Descendants(ns + "Fa").FirstOrDefault();
+        if (fa != null)
+        {
+            decimal.TryParse(fa.Element(ns + "P_13_1")?.Value, System.Globalization.NumberStyles.Any, 
+                System.Globalization.CultureInfo.InvariantCulture, out var net);
+            decimal.TryParse(fa.Element(ns + "P_14_1")?.Value, System.Globalization.NumberStyles.Any, 
+                System.Globalization.CultureInfo.InvariantCulture, out var vat);
+            decimal.TryParse(fa.Element(ns + "P_15")?.Value, System.Globalization.NumberStyles.Any, 
+                System.Globalization.CultureInfo.InvariantCulture, out var gross);
+            
+            result.NetTotal = net;
+            result.VatTotal = vat;
+            result.GrossTotal = gross;
+        }
+
+        return result;
+    }
+
+    private decimal CalculateVatFromRate(decimal net, string vatRate)
+    {
+        if (decimal.TryParse(vatRate, System.Globalization.NumberStyles.Any, 
+            System.Globalization.CultureInfo.InvariantCulture, out var rate))
+            return Math.Round(net * rate / 100, 2);
+
+        return vatRate.ToLower() switch
+        {
+            "zw" or "np" or "oo" => 0,
+            _ => Math.Round(net * 0.23m, 2)
+        };
+    }
 
     #region Open Online Session
 
@@ -312,7 +512,8 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                 Success = true,
                 ElementReferenceNumber = sendResponse?.ElementReferenceNumber,
                 ProcessingCode = sendResponse?.ProcessingCode,
-                ProcessingDescription = sendResponse?.ProcessingDescription
+                ProcessingDescription = sendResponse?.ProcessingDescription,
+                InvoiceHash = invoiceHash
             };
         }
         catch (Exception ex)

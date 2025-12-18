@@ -39,6 +39,7 @@ builder.Services.AddScoped<IKSeFCryptoService, KSeFCryptoService>();
 builder.Services.AddScoped<IKSeFAuthService, KSeFAuthService>();
 builder.Services.AddScoped<IKSeFInvoiceService, KSeFInvoiceService>();
 builder.Services.AddScoped<InvoiceXmlGenerator>();
+builder.Services.AddScoped<IPdfGeneratorService, PdfGeneratorService>();
 
 // CORS - dla frontendu na Netlify
 builder.Services.AddCors(options =>
