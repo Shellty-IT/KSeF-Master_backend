@@ -19,37 +19,55 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// HttpClient dla KSeF
+// ═══════════════════════════════════════════════════════════════
+// HTTP CLIENT dla KSeF
+// ═══════════════════════════════════════════════════════════════
+
 var ksefBaseUrl = builder.Configuration.GetValue<string>("KSeF:BaseUrl") 
     ?? "https://ksef-test.mf.gov.pl/api/v2/";
 var timeoutSeconds = builder.Configuration.GetValue<int>("KSeF:TimeoutSeconds", 60);
 
+// Rejestruj handler logujący
+builder.Services.AddTransient<KSeFHttpLoggingHandler>();
+
 builder.Services.AddHttpClient("KSeF", client =>
 {
     client.BaseAddress = new Uri(ksefBaseUrl);
-    client.DefaultRequestHeaders.Add("Accept", "application/json");
     client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
-});
+    
+    // Wyczyść i ustaw nagłówki
+    client.DefaultRequestHeaders.Clear();
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+    client.DefaultRequestHeaders.Add("User-Agent", "KSeF-Backend/1.0 (.NET)");
+})
+.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    // WAŻNE: Nie podążaj automatycznie za przekierowaniami
+    // Dzięki temu wykryjemy problem z API zamiast otrzymywać HTML
+    AllowAutoRedirect = false
+})
+.AddHttpMessageHandler<KSeFHttpLoggingHandler>();
 
-// Session Manager - Singleton (przechowuje sesję w pamięci)
+// ═══════════════════════════════════════════════════════════════
+// APPLICATION SERVICES
+// ═══════════════════════════════════════════════════════════════
+
 builder.Services.AddSingleton<KSeFSessionManager>();
-
-// Services - Scoped
 builder.Services.AddScoped<IKSeFCryptoService, KSeFCryptoService>();
 builder.Services.AddScoped<IKSeFAuthService, KSeFAuthService>();
 builder.Services.AddScoped<IKSeFInvoiceService, KSeFInvoiceService>();
 builder.Services.AddScoped<InvoiceXmlGenerator>();
 builder.Services.AddScoped<IPdfGeneratorService, PdfGeneratorService>();
 
-// CORS - dla frontendu na Netlify
+// CORS
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
         policy
-            .AllowAnyOrigin()    // Pozwala na requesty z dowolnego originu (Netlify)
-            .AllowAnyMethod()    // GET, POST, PUT, DELETE, etc.
-            .AllowAnyHeader();   // Content-Type, Authorization, etc.
+            .AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
     });
 });
 
@@ -59,7 +77,6 @@ var app = builder.Build();
 // MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════
 
-// Swagger UI - zawsze włączony (przydatne do testów)
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
@@ -67,13 +84,9 @@ app.UseSwaggerUI(c =>
     c.RoutePrefix = "swagger";
 });
 
-// CORS musi być przed MapControllers
 app.UseCors();
-
-// Mapuj kontrolery
 app.MapControllers();
 
-// Health check endpoint (dla Render.com)
 app.MapGet("/", () => Results.Ok(new
 {
     status = "healthy",
