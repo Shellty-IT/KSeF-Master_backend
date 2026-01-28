@@ -1,11 +1,18 @@
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = Directory.GetCurrentDirectory()
+});
 
-// ═══════════════════════════════════════════════════════════════
-// SERVICES
-// ═══════════════════════════════════════════════════════════════
+builder.Configuration.Sources.Clear();
+builder.Configuration
+    .SetBasePath(Directory.GetCurrentDirectory())
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: false)
+    .AddEnvironmentVariables();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -19,15 +26,10 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// ═══════════════════════════════════════════════════════════════
-// HTTP CLIENT dla KSeF
-// ═══════════════════════════════════════════════════════════════
-
 var ksefBaseUrl = builder.Configuration.GetValue<string>("KSeF:BaseUrl") 
     ?? "https://ksef-test.mf.gov.pl/api/v2/";
 var timeoutSeconds = builder.Configuration.GetValue<int>("KSeF:TimeoutSeconds", 60);
 
-// Rejestruj handler logujący
 builder.Services.AddTransient<KSeFHttpLoggingHandler>();
 
 builder.Services.AddHttpClient("KSeF", client =>
@@ -35,22 +37,15 @@ builder.Services.AddHttpClient("KSeF", client =>
     client.BaseAddress = new Uri(ksefBaseUrl);
     client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
     
-    // Wyczyść i ustaw nagłówki
     client.DefaultRequestHeaders.Clear();
     client.DefaultRequestHeaders.Add("Accept", "application/json");
     client.DefaultRequestHeaders.Add("User-Agent", "KSeF-Backend/1.0 (.NET)");
 })
 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
-    // WAŻNE: Nie podążaj automatycznie za przekierowaniami
-    // Dzięki temu wykryjemy problem z API zamiast otrzymywać HTML
     AllowAutoRedirect = false
 })
 .AddHttpMessageHandler<KSeFHttpLoggingHandler>();
-
-// ═══════════════════════════════════════════════════════════════
-// APPLICATION SERVICES
-// ═══════════════════════════════════════════════════════════════
 
 builder.Services.AddSingleton<KSeFSessionManager>();
 builder.Services.AddScoped<IKSeFCryptoService, KSeFCryptoService>();
@@ -59,7 +54,6 @@ builder.Services.AddScoped<IKSeFInvoiceService, KSeFInvoiceService>();
 builder.Services.AddScoped<InvoiceXmlGenerator>();
 builder.Services.AddScoped<IPdfGeneratorService, PdfGeneratorService>();
 
-// CORS
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -72,10 +66,6 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
-
-// ═══════════════════════════════════════════════════════════════
-// MIDDLEWARE
-// ═══════════════════════════════════════════════════════════════
 
 app.UseSwagger();
 app.UseSwaggerUI(c =>
@@ -101,18 +91,11 @@ app.MapGet("/health", () => Results.Ok(new
     timestamp = DateTime.UtcNow
 }));
 
-// ═══════════════════════════════════════════════════════════════
-// START
-// ═══════════════════════════════════════════════════════════════
-
 var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
 var url = $"http://0.0.0.0:{port}";
 
-app.Logger.LogInformation("═══════════════════════════════════════════════════════════════");
-app.Logger.LogInformation("  KSeF Backend API");
-app.Logger.LogInformation("  Starting on: {Url}", url);
-app.Logger.LogInformation("  Swagger UI: {Url}/swagger", url);
-app.Logger.LogInformation("  KSeF API: {KSeFUrl}", ksefBaseUrl);
-app.Logger.LogInformation("═══════════════════════════════════════════════════════════════");
+app.Logger.LogInformation("KSeF Backend API starting on: {Url}", url);
+app.Logger.LogInformation("Swagger UI: {Url}/swagger", url);
+app.Logger.LogInformation("KSeF API: {KSeFUrl}", ksefBaseUrl);
 
 app.Run(url);
