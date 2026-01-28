@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿// Models/Requests/InvoiceQueryRequest.cs
+using System.Text.Json.Serialization;
 
 namespace KSeF.Backend.Models.Requests;
 
@@ -9,6 +10,24 @@ public class InvoiceQueryRequest
 
     [JsonPropertyName("dateRange")]
     public DateRangeFilter DateRange { get; set; } = new();
+
+    [JsonPropertyName("amountFrom")]
+    public decimal? AmountFrom { get; set; }
+
+    [JsonPropertyName("amountTo")]
+    public decimal? AmountTo { get; set; }
+
+    [JsonPropertyName("contractorNip")]
+    public string? ContractorNip { get; set; }
+
+    [JsonPropertyName("contractorName")]
+    public string? ContractorName { get; set; }
+
+    [JsonPropertyName("invoiceNumber")]
+    public string? InvoiceNumber { get; set; }
+
+    [JsonPropertyName("currency")]
+    public string? Currency { get; set; }
 }
 
 public class DateRangeFilter
