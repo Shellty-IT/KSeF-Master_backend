@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("KSeF_Backend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f98f6f99eec691cfa072fd0a671ed8eacf00cf31")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+8589f0a78887b2291d323665e575c7db9678e6df")]
 [assembly: System.Reflection.AssemblyProductAttribute("KSeF_Backend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("KSeF_Backend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
