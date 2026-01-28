@@ -6,6 +6,7 @@ namespace KSeF.Backend.Services;
 public class InvoiceXmlGenerator
 {
     private readonly ILogger<InvoiceXmlGenerator> _logger;
+    private const string Namespace = "http://crd.gov.pl/wzor/2023/06/29/12648/";
 
     public InvoiceXmlGenerator(ILogger<InvoiceXmlGenerator> logger)
     {
@@ -16,14 +17,8 @@ public class InvoiceXmlGenerator
     {
         _logger.LogInformation("Generowanie XML faktury: {Number}", invoice.InvoiceNumber);
 
-        if (!string.IsNullOrEmpty(sessionNip) && invoice.Seller.Nip != sessionNip)
-        {
-            _logger.LogWarning(
-                "NIP sprzedawcy ({SellerNip}) różni się od NIP sesji ({SessionNip}). " +
-                "KSeF może odrzucić fakturę!",
-                invoice.Seller.Nip, sessionNip);
-        }
-
+        var effectiveSellerNip = !string.IsNullOrEmpty(sessionNip) ? sessionNip : invoice.Seller.Nip;
+        
         var now = DateTime.UtcNow;
         var dateTime = now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ");
 
@@ -32,47 +27,77 @@ public class InvoiceXmlGenerator
         var sb = new StringBuilder();
 
         sb.Append(@"<?xml version=""1.0"" encoding=""UTF-8""?>");
-        sb.Append(@"<Faktura xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" ");
-        sb.Append(@"xmlns:xsd=""http://www.w3.org/2001/XMLSchema"" ");
-        sb.Append(@"xmlns=""http://crd.gov.pl/wzor/2023/06/29/12648/"">");
+        sb.Append($@"<Faktura xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" ");
+        sb.Append($@"xmlns:xsd=""http://www.w3.org/2001/XMLSchema"" ");
+        sb.Append($@"xmlns=""{Namespace}"">");
 
+        AppendNaglowek(sb, dateTime);
+        AppendPodmiot1(sb, invoice.Seller, effectiveSellerNip);
+        AppendPodmiot2(sb, invoice.Buyer);
+        AppendFa(sb, invoice, totals);
+
+        sb.Append("</Faktura>");
+
+        var xml = sb.ToString();
+        _logger.LogDebug("Wygenerowany XML faktury ({Size} bajtów)", xml.Length);
+
+        return xml;
+    }
+
+    private void AppendNaglowek(StringBuilder sb, string dateTime)
+    {
         sb.Append("<Naglowek>");
         sb.Append(@"<KodFormularza kodSystemowy=""FA (2)"" wersjaSchemy=""1-0E"">FA</KodFormularza>");
         sb.Append("<WariantFormularza>2</WariantFormularza>");
         sb.Append($"<DataWytworzeniaFa>{dateTime}</DataWytworzeniaFa>");
         sb.Append("<SystemInfo>KSeF Master</SystemInfo>");
         sb.Append("</Naglowek>");
+    }
 
+    private void AppendPodmiot1(StringBuilder sb, PartyData seller, string effectiveNip)
+    {
         sb.Append("<Podmiot1>");
+        
         sb.Append("<DaneIdentyfikacyjne>");
-        sb.Append($"<NIP>{EscapeXml(invoice.Seller.Nip)}</NIP>");
-        sb.Append($"<Nazwa>{EscapeXml(invoice.Seller.Name)}</Nazwa>");
+        sb.Append($"<NIP>{EscapeXml(effectiveNip)}</NIP>");
+        sb.Append($"<Nazwa>{EscapeXml(seller.Name)}</Nazwa>");
         sb.Append("</DaneIdentyfikacyjne>");
+        
         sb.Append("<Adres>");
-        sb.Append($"<KodKraju>{EscapeXml(invoice.Seller.CountryCode)}</KodKraju>");
-        sb.Append($"<AdresL1>{EscapeXml(invoice.Seller.AddressLine1)}</AdresL1>");
-        if (!string.IsNullOrEmpty(invoice.Seller.AddressLine2))
+        sb.Append($"<KodKraju>{EscapeXml(seller.CountryCode)}</KodKraju>");
+        sb.Append($"<AdresL1>{EscapeXml(seller.AddressLine1)}</AdresL1>");
+        if (!string.IsNullOrEmpty(seller.AddressLine2))
         {
-            sb.Append($"<AdresL2>{EscapeXml(invoice.Seller.AddressLine2)}</AdresL2>");
+            sb.Append($"<AdresL2>{EscapeXml(seller.AddressLine2)}</AdresL2>");
         }
         sb.Append("</Adres>");
+        
         sb.Append("</Podmiot1>");
+    }
 
+    private void AppendPodmiot2(StringBuilder sb, PartyData buyer)
+    {
         sb.Append("<Podmiot2>");
+        
         sb.Append("<DaneIdentyfikacyjne>");
-        sb.Append($"<NIP>{EscapeXml(invoice.Buyer.Nip)}</NIP>");
-        sb.Append($"<Nazwa>{EscapeXml(invoice.Buyer.Name)}</Nazwa>");
+        sb.Append($"<NIP>{EscapeXml(buyer.Nip)}</NIP>");
+        sb.Append($"<Nazwa>{EscapeXml(buyer.Name)}</Nazwa>");
         sb.Append("</DaneIdentyfikacyjne>");
+        
         sb.Append("<Adres>");
-        sb.Append($"<KodKraju>{EscapeXml(invoice.Buyer.CountryCode)}</KodKraju>");
-        sb.Append($"<AdresL1>{EscapeXml(invoice.Buyer.AddressLine1)}</AdresL1>");
-        if (!string.IsNullOrEmpty(invoice.Buyer.AddressLine2))
+        sb.Append($"<KodKraju>{EscapeXml(buyer.CountryCode)}</KodKraju>");
+        sb.Append($"<AdresL1>{EscapeXml(buyer.AddressLine1)}</AdresL1>");
+        if (!string.IsNullOrEmpty(buyer.AddressLine2))
         {
-            sb.Append($"<AdresL2>{EscapeXml(invoice.Buyer.AddressLine2)}</AdresL2>");
+            sb.Append($"<AdresL2>{EscapeXml(buyer.AddressLine2)}</AdresL2>");
         }
         sb.Append("</Adres>");
+        
         sb.Append("</Podmiot2>");
+    }
 
+    private void AppendFa(StringBuilder sb, CreateInvoiceRequest invoice, InvoiceTotals totals)
+    {
         sb.Append("<Fa>");
 
         sb.Append($"<KodWaluty>{EscapeXml(invoice.Currency)}</KodWaluty>");
@@ -82,8 +107,72 @@ public class InvoiceXmlGenerator
 
         AppendVatSummary(sb, totals);
 
-        sb.Append($"<P_15>{FormatAmount(totals.GrossTotal)}</P_15>");
+        sb.Append($"<P_15>{FormatDecimal(totals.GrossTotal)}</P_15>");
 
+        AppendAdnotacje(sb);
+
+        sb.Append("<RodzajFaktury>VAT</RodzajFaktury>");
+
+        AppendFaWiersze(sb, invoice.Items);
+
+        AppendPlatnosc(sb, invoice.Payment);
+
+        sb.Append("</Fa>");
+    }
+
+    private void AppendVatSummary(StringBuilder sb, InvoiceTotals totals)
+    {
+        if (totals.ByVatRate.TryGetValue("23", out var vat23) && vat23.Net > 0)
+        {
+            sb.Append($"<P_13_1>{FormatDecimal(vat23.Net)}</P_13_1>");
+            sb.Append($"<P_14_1>{FormatDecimal(vat23.Vat)}</P_14_1>");
+        }
+        else if (totals.ByVatRate.TryGetValue("22", out var vat22) && vat22.Net > 0)
+        {
+            sb.Append($"<P_13_1>{FormatDecimal(vat22.Net)}</P_13_1>");
+            sb.Append($"<P_14_1>{FormatDecimal(vat22.Vat)}</P_14_1>");
+        }
+
+        if (totals.ByVatRate.TryGetValue("8", out var vat8) && vat8.Net > 0)
+        {
+            sb.Append($"<P_13_2>{FormatDecimal(vat8.Net)}</P_13_2>");
+            sb.Append($"<P_14_2>{FormatDecimal(vat8.Vat)}</P_14_2>");
+        }
+        else if (totals.ByVatRate.TryGetValue("7", out var vat7) && vat7.Net > 0)
+        {
+            sb.Append($"<P_13_2>{FormatDecimal(vat7.Net)}</P_13_2>");
+            sb.Append($"<P_14_2>{FormatDecimal(vat7.Vat)}</P_14_2>");
+        }
+
+        if (totals.ByVatRate.TryGetValue("5", out var vat5) && vat5.Net > 0)
+        {
+            sb.Append($"<P_13_3>{FormatDecimal(vat5.Net)}</P_13_3>");
+            sb.Append($"<P_14_3>{FormatDecimal(vat5.Vat)}</P_14_3>");
+        }
+
+        if (totals.ByVatRate.TryGetValue("0", out var vat0) && vat0.Net > 0)
+        {
+            sb.Append($"<P_13_6_1>{FormatDecimal(vat0.Net)}</P_13_6_1>");
+        }
+
+        if (totals.ByVatRate.TryGetValue("zw", out var vatZw) && vatZw.Net > 0)
+        {
+            sb.Append($"<P_13_7>{FormatDecimal(vatZw.Net)}</P_13_7>");
+        }
+
+        if (totals.ByVatRate.TryGetValue("np", out var vatNp) && vatNp.Net > 0)
+        {
+            sb.Append($"<P_13_8>{FormatDecimal(vatNp.Net)}</P_13_8>");
+        }
+
+        if (totals.ByVatRate.TryGetValue("oo", out var vatOo) && vatOo.Net > 0)
+        {
+            sb.Append($"<P_13_10>{FormatDecimal(vatOo.Net)}</P_13_10>");
+        }
+    }
+
+    private void AppendAdnotacje(StringBuilder sb)
+    {
         sb.Append("<Adnotacje>");
         sb.Append("<P_16>2</P_16>");
         sb.Append("<P_17>2</P_17>");
@@ -94,11 +183,12 @@ public class InvoiceXmlGenerator
         sb.Append("<P_23>2</P_23>");
         sb.Append("<PMarzy><P_PMarzyN>1</P_PMarzyN></PMarzy>");
         sb.Append("</Adnotacje>");
+    }
 
-        sb.Append("<RodzajFaktury>VAT</RodzajFaktury>");
-
+    private void AppendFaWiersze(StringBuilder sb, List<InvoiceItem> items)
+    {
         int lineNumber = 1;
-        foreach (var item in invoice.Items)
+        foreach (var item in items)
         {
             var netValue = Math.Round(item.Quantity * item.UnitPriceNet, 2);
 
@@ -107,29 +197,16 @@ public class InvoiceXmlGenerator
             sb.Append($"<P_7>{EscapeXml(item.Name)}</P_7>");
             sb.Append($"<P_8A>{EscapeXml(item.Unit)}</P_8A>");
             sb.Append($"<P_8B>{FormatQuantity(item.Quantity)}</P_8B>");
-            sb.Append($"<P_9A>{FormatAmount(item.UnitPriceNet)}</P_9A>");
-            sb.Append($"<P_11>{FormatAmount(netValue)}</P_11>");
-            sb.Append($"<P_12>{FormatVatRate(item.VatRate)}</P_12>");
+            sb.Append($"<P_9A>{FormatDecimal(item.UnitPriceNet)}</P_9A>");
+            sb.Append($"<P_11>{FormatDecimal(netValue)}</P_11>");
+            sb.Append($"<P_12>{NormalizeVatRate(item.VatRate)}</P_12>");
             sb.Append("</FaWiersz>");
         }
-
-        AppendPayment(sb, invoice.Payment);
-
-        sb.Append("</Fa>");
-        sb.Append("</Faktura>");
-
-        var xml = sb.ToString();
-        _logger.LogDebug("Wygenerowany XML faktury ({Size} bajtów)", xml.Length);
-
-        return xml;
     }
 
-    private void AppendPayment(StringBuilder sb, PaymentData? payment)
+    private void AppendPlatnosc(StringBuilder sb, PaymentData? payment)
     {
-        if (payment == null)
-            return;
-
-        if (string.IsNullOrEmpty(payment.Method))
+        if (payment == null || string.IsNullOrEmpty(payment.Method))
             return;
 
         sb.Append("<Platnosc>");
@@ -144,8 +221,7 @@ public class InvoiceXmlGenerator
         var formaPlatnosci = MapPaymentMethod(payment.Method);
         sb.Append($"<FormaPlatnosci>{formaPlatnosci}</FormaPlatnosci>");
 
-        if (!string.IsNullOrEmpty(payment.BankAccount) &&
-            (payment.Method?.ToLower() == "przelew" || payment.Method?.ToLower() == "6"))
+        if (!string.IsNullOrEmpty(payment.BankAccount))
         {
             var cleanAccount = CleanBankAccount(payment.BankAccount);
             if (cleanAccount.Length >= 10 && cleanAccount.Length <= 32)
@@ -159,9 +235,9 @@ public class InvoiceXmlGenerator
         sb.Append("</Platnosc>");
     }
 
-    private string MapPaymentMethod(string? method)
+    private string MapPaymentMethod(string method)
     {
-        return method?.ToLower() switch
+        return method.ToLowerInvariant() switch
         {
             "gotówka" or "gotowka" or "1" => "1",
             "karta" or "2" => "2",
@@ -174,69 +250,15 @@ public class InvoiceXmlGenerator
         };
     }
 
-    private string CleanBankAccount(string? account)
+    private string CleanBankAccount(string account)
     {
-        if (string.IsNullOrEmpty(account))
-            return string.Empty;
-
-        var result = new StringBuilder();
+        var sb = new StringBuilder();
         foreach (char c in account)
         {
-            if (char.IsDigit(c) || char.IsUpper(c))
-                result.Append(c);
+            if (char.IsLetterOrDigit(c))
+                sb.Append(char.ToUpperInvariant(c));
         }
-        return result.ToString();
-    }
-
-    private void AppendVatSummary(StringBuilder sb, InvoiceTotals totals)
-    {
-        if (totals.ByVatRate.TryGetValue("23", out var vat23))
-        {
-            sb.Append($"<P_13_1>{FormatAmount(vat23.Net)}</P_13_1>");
-            sb.Append($"<P_14_1>{FormatAmount(vat23.Vat)}</P_14_1>");
-        }
-        else if (totals.ByVatRate.TryGetValue("22", out var vat22))
-        {
-            sb.Append($"<P_13_1>{FormatAmount(vat22.Net)}</P_13_1>");
-            sb.Append($"<P_14_1>{FormatAmount(vat22.Vat)}</P_14_1>");
-        }
-
-        if (totals.ByVatRate.TryGetValue("8", out var vat8))
-        {
-            sb.Append($"<P_13_2>{FormatAmount(vat8.Net)}</P_13_2>");
-            sb.Append($"<P_14_2>{FormatAmount(vat8.Vat)}</P_14_2>");
-        }
-        else if (totals.ByVatRate.TryGetValue("7", out var vat7))
-        {
-            sb.Append($"<P_13_2>{FormatAmount(vat7.Net)}</P_13_2>");
-            sb.Append($"<P_14_2>{FormatAmount(vat7.Vat)}</P_14_2>");
-        }
-
-        if (totals.ByVatRate.TryGetValue("5", out var vat5))
-        {
-            sb.Append($"<P_13_3>{FormatAmount(vat5.Net)}</P_13_3>");
-            sb.Append($"<P_14_3>{FormatAmount(vat5.Vat)}</P_14_3>");
-        }
-
-        if (totals.ByVatRate.TryGetValue("0", out var vat0))
-        {
-            sb.Append($"<P_13_6_1>{FormatAmount(vat0.Net)}</P_13_6_1>");
-        }
-
-        if (totals.ByVatRate.TryGetValue("zw", out var vatZw))
-        {
-            sb.Append($"<P_13_7>{FormatAmount(vatZw.Net)}</P_13_7>");
-        }
-
-        if (totals.ByVatRate.TryGetValue("np", out var vatNp))
-        {
-            sb.Append($"<P_13_8>{FormatAmount(vatNp.Net)}</P_13_8>");
-        }
-
-        if (totals.ByVatRate.TryGetValue("oo", out var vatOo))
-        {
-            sb.Append($"<P_13_10>{FormatAmount(vatOo.Net)}</P_13_10>");
-        }
+        return sb.ToString();
     }
 
     private InvoiceTotals CalculateTotals(List<InvoiceItem> items)
@@ -246,8 +268,8 @@ public class InvoiceXmlGenerator
         foreach (var item in items)
         {
             var netValue = Math.Round(item.Quantity * item.UnitPriceNet, 2);
-            var vatRatePercent = ParseVatRateToPercent(item.VatRate);
-            var vatValue = Math.Round(netValue * vatRatePercent / 100m, 2);
+            var vatPercent = GetVatPercent(item.VatRate);
+            var vatValue = Math.Round(netValue * vatPercent / 100m, 2);
 
             totals.NetTotal += netValue;
             totals.VatTotal += vatValue;
@@ -268,7 +290,7 @@ public class InvoiceXmlGenerator
         return totals;
     }
 
-    private decimal ParseVatRateToPercent(string vatRate)
+    private decimal GetVatPercent(string vatRate)
     {
         var normalized = vatRate.Trim().ToLowerInvariant();
         return normalized switch
@@ -289,34 +311,32 @@ public class InvoiceXmlGenerator
     private string NormalizeVatRateKey(string vatRate)
     {
         var normalized = vatRate.Trim().ToLowerInvariant();
-        if (decimal.TryParse(normalized, out var numRate))
-            return ((int)numRate).ToString();
+        if (int.TryParse(normalized, out var numRate))
+            return numRate.ToString();
         return normalized;
     }
 
-    private string FormatVatRate(string vatRate)
+    private string NormalizeVatRate(string vatRate)
     {
         var normalized = vatRate.Trim().ToLowerInvariant();
         return normalized switch
         {
             "23" or "22" or "8" or "7" or "5" or "4" or "3" or "0" => normalized,
             "zw" or "np" or "oo" => normalized,
-            _ => vatRate.Trim()
+            _ => int.TryParse(vatRate, out var rate) ? rate.ToString() : "23"
         };
     }
 
-    private string FormatAmount(decimal value)
+    private string FormatDecimal(decimal value)
     {
         value = Math.Round(value, 2);
-        if (value == Math.Floor(value))
-            return ((long)value).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private string FormatQuantity(decimal value)
     {
         if (value == Math.Floor(value))
-            return ((long)value).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return ((long)value).ToString();
         return value.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
     }
 
