@@ -228,7 +228,6 @@ public class KSeFController : ControllerBase
         _logger.LogInformation("=== SEND INVOICE REQUEST ===");
         _logger.LogInformation("Invoice number: {Number}", request.InvoiceNumber);
 
-        // Walidacja
         var validationErrors = ValidateInvoiceRequest(request);
         if (validationErrors.Count > 0)
         {
@@ -261,7 +260,8 @@ public class KSeFController : ControllerBase
                 {
                     elementReferenceNumber = result.ElementReferenceNumber,
                     processingCode = result.ProcessingCode,
-                    processingDescription = result.ProcessingDescription
+                    processingDescription = result.ProcessingDescription,
+                    invoiceHash = result.InvoiceHash
                 }
             });
         }
@@ -275,7 +275,6 @@ public class KSeFController : ControllerBase
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
-    
     
 // ═══════════════════════════════════════════════════════════════
 // PDF
