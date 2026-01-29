@@ -11,7 +11,8 @@ public class PdfGeneratorService : IPdfGeneratorService
 {
     private readonly ILogger<PdfGeneratorService> _logger;
 
-    private const string KSEF_TEST_URL = "https://ksef-test.mf.gov.pl";
+    private const string KSEF_VERIFY_URL = "https://qr-test.ksef.mf.gov.pl";
+    private const string KSEF_QR_URL = "https://qr-test.ksef.mf.gov.pl";
     private const string APP_URL = "https://ksef-master.netlify.app/";
 
     public PdfGeneratorService(ILogger<PdfGeneratorService> logger)
@@ -30,9 +31,16 @@ public class PdfGeneratorService : IPdfGeneratorService
             request.InvoiceHash ?? ""
         );
 
-        _logger.LogInformation("Wygenerowany URL weryfikacyjny: {Url}", verificationUrl);
+        var qrUrl = BuildQrUrl(
+            request.Seller?.Nip ?? "",
+            request.IssueDate ?? "",
+            request.InvoiceHash ?? ""
+        );
 
-        var document = CreateInvoiceDocument(request, verificationUrl);
+        _logger.LogInformation("URL weryfikacyjny: {Url}", verificationUrl);
+        _logger.LogInformation("URL dla QR: {QrUrl}", qrUrl);
+
+        var document = CreateInvoiceDocument(request, verificationUrl, qrUrl);
         return document.GeneratePdf();
     }
 
@@ -48,13 +56,31 @@ public class PdfGeneratorService : IPdfGeneratorService
             return "";
         }
 
-        var dateParts = issueDate.Split('-');
-        var formattedDate = dateParts.Length == 3
-            ? $"{dateParts[2]}-{dateParts[1]}-{dateParts[0]}"
-            : issueDate;
-
+        var formattedDate = FormatDateForUrl(issueDate);
         var hashBase64Url = ConvertToBase64Url(invoiceHash);
-        return $"{KSEF_TEST_URL}/client-app/invoice/{sellerNip}/{formattedDate}/{hashBase64Url}";
+        return $"{KSEF_VERIFY_URL}/client-app/invoice/{sellerNip}/{formattedDate}/{hashBase64Url}";
+    }
+
+    private string BuildQrUrl(string sellerNip, string issueDate, string invoiceHash)
+    {
+        if (string.IsNullOrEmpty(sellerNip) || string.IsNullOrEmpty(issueDate) || string.IsNullOrEmpty(invoiceHash))
+        {
+            return "";
+        }
+
+        var formattedDate = FormatDateForUrl(issueDate);
+        var hashBase64Url = ConvertToBase64Url(invoiceHash);
+        return $"{KSEF_QR_URL}/{sellerNip}/{formattedDate}/{hashBase64Url}";
+    }
+
+    private string FormatDateForUrl(string issueDate)
+    {
+        var dateParts = issueDate.Split('-');
+        if (dateParts.Length == 3)
+        {
+            return $"{dateParts[2]}-{dateParts[1]}-{dateParts[0]}";
+        }
+        return issueDate;
     }
 
     private string ConvertToBase64Url(string base64)
@@ -73,10 +99,10 @@ public class PdfGeneratorService : IPdfGeneratorService
         return qrCode.GetGraphic(8);
     }
 
-    private Document CreateInvoiceDocument(GeneratePdfRequest request, string verificationUrl)
+    private Document CreateInvoiceDocument(GeneratePdfRequest request, string verificationUrl, string qrUrl)
     {
-        var qrCodeBytes = GenerateQrCode(verificationUrl);
-        var hasQrCode = qrCodeBytes.Length > 0 && !string.IsNullOrEmpty(verificationUrl);
+        var qrCodeBytes = GenerateQrCode(qrUrl);
+        var hasQrCode = qrCodeBytes.Length > 0 && !string.IsNullOrEmpty(qrUrl);
 
         return Document.Create(container =>
         {
@@ -400,7 +426,6 @@ public class PdfGeneratorService : IPdfGeneratorService
                     textCol.Item().Text("Skopiuj poniższy link i wklej w przeglądarkę:").FontSize(8);
                     textCol.Item().PaddingTop(10);
                     
-                    // Klikalny hyperlink
                     textCol.Item()
                         .Hyperlink(verificationUrl)
                         .Text(verificationUrl)
