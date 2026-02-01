@@ -221,7 +221,7 @@ public class KSeFController : ControllerBase
             message = "Sesja wysyłkowa zamknięta"
         });
     }
-    
+    //ddd
     [HttpPost("invoice/send")]
     public async Task<IActionResult> SendInvoice([FromBody] CreateInvoiceRequest request, CancellationToken ct)
     {
