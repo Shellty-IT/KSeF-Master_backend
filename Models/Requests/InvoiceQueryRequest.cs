@@ -28,6 +28,12 @@ public class InvoiceQueryRequest
 
     [JsonPropertyName("currency")]
     public string? Currency { get; set; }
+
+    [JsonPropertyName("maxResults")]
+    public int? MaxResults { get; set; }
+
+    [JsonPropertyName("sortDescending")]
+    public bool SortDescending { get; set; } = true;
 }
 
 public class DateRangeFilter

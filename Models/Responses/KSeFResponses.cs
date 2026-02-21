@@ -1,8 +1,8 @@
-﻿using System.Text.Json.Serialization;
+﻿// Models/Responses/KSeFResponses.cs
+using System.Text.Json.Serialization;
 
 namespace KSeF.Backend.Models.Responses;
 
-// ============ Certyfikaty ============
 public class CertificateInfo
 {
     [JsonPropertyName("certificate")]
@@ -18,7 +18,6 @@ public class CertificateInfo
     public List<string>? Usage { get; set; }
 }
 
-// ============ Challenge ============
 public class ChallengeResponse
 {
     [JsonPropertyName("challenge")]
@@ -28,7 +27,6 @@ public class ChallengeResponse
     public DateTime Timestamp { get; set; }
 }
 
-// ============ Auth Token ============
 public class AuthTokenResponse
 {
     [JsonPropertyName("referenceNumber")]
@@ -47,7 +45,6 @@ public class TokenInfo
     public DateTime ValidUntil { get; set; }
 }
 
-// ============ Auth Status ============
 public class AuthStatusResponse
 {
     [JsonPropertyName("startDate")]
@@ -72,7 +69,6 @@ public class StatusInfo
     public string Description { get; set; } = string.Empty;
 }
 
-// ============ Token Redeem ============
 public class TokenRedeemResponse
 {
     [JsonPropertyName("accessToken")]
@@ -82,14 +78,12 @@ public class TokenRedeemResponse
     public TokenInfo? RefreshToken { get; set; }
 }
 
-// ============ Token Refresh ============
 public class TokenRefreshResponse
 {
     [JsonPropertyName("accessToken")]
     public TokenInfo? AccessToken { get; set; }
 }
 
-// ============ Session Online ============
 public class OpenSessionResponse
 {
     [JsonPropertyName("referenceNumber")]
@@ -99,7 +93,6 @@ public class OpenSessionResponse
     public DateTime ValidUntil { get; set; }
 }
 
-// ============ Invoice Query ============
 public class InvoiceQueryResponse
 {
     [JsonPropertyName("hasMore")]
@@ -113,6 +106,15 @@ public class InvoiceQueryResponse
 
     [JsonPropertyName("invoices")]
     public List<InvoiceMetadata> Invoices { get; set; } = new();
+
+    [JsonPropertyName("totalCount")]
+    public int TotalCount { get; set; }
+
+    [JsonPropertyName("fetchedAt")]
+    public DateTime FetchedAt { get; set; } = DateTime.UtcNow;
+
+    [JsonPropertyName("pagesProcessed")]
+    public int PagesProcessed { get; set; }
 }
 
 public class InvoiceMetadata
@@ -211,7 +213,6 @@ public class FormCodeInfo
     public string Value { get; set; } = string.Empty;
 }
 
-// ============ Send Invoice Response ============
 public class SendInvoiceApiResponse
 {
     [JsonPropertyName("elementReferenceNumber")]
@@ -230,7 +231,6 @@ public class SendInvoiceApiResponse
     public DateTime? Timestamp { get; set; }
 }
 
-// ============ Invoice Details (do pobierania z KSeF) ============
 public class InvoiceDetailsResponse
 {
     [JsonPropertyName("timestamp")]
@@ -276,7 +276,6 @@ public class InvoicePayloadInfo
     public string? InvoiceBody { get; set; }
 }
 
-// ============ Backend Result Wrappers ============
 public class AuthResult
 {
     public bool Success { get; set; }
@@ -304,7 +303,6 @@ public class SendInvoiceResult
     public string? InvoiceHash { get; set; }
 }
 
-// ============ Invoice Details Result ============
 public class InvoiceDetailsResult
 {
     public bool Success { get; set; }
@@ -336,4 +334,36 @@ public class InvoiceItemResult
     public decimal NetValue { get; set; }
     public decimal VatValue { get; set; }
     public decimal GrossValue { get; set; }
+}
+
+public class InvoiceStatsResponse
+{
+    public int IssuedCount { get; set; }
+    public int ReceivedCount { get; set; }
+    public decimal IssuedNetTotal { get; set; }
+    public decimal IssuedGrossTotal { get; set; }
+    public decimal ReceivedNetTotal { get; set; }
+    public decimal ReceivedGrossTotal { get; set; }
+    public DateTime PeriodFrom { get; set; }
+    public DateTime PeriodTo { get; set; }
+    public DateTime FetchedAt { get; set; } = DateTime.UtcNow;
+    public List<MonthlyStats> Monthly { get; set; } = new();
+    public Dictionary<string, int> TopContractors { get; set; } = new();
+    public Dictionary<string, CurrencyStats> ByCurrency { get; set; } = new();
+}
+
+public class MonthlyStats
+{
+    public string Month { get; set; } = string.Empty;
+    public int IssuedCount { get; set; }
+    public int ReceivedCount { get; set; }
+    public decimal IssuedGross { get; set; }
+    public decimal ReceivedGross { get; set; }
+}
+
+public class CurrencyStats
+{
+    public int Count { get; set; }
+    public decimal NetTotal { get; set; }
+    public decimal GrossTotal { get; set; }
 }

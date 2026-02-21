@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿// Services/KSeFInvoiceService.cs
+using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using KSeF.Backend.Models.Requests;
@@ -41,40 +42,230 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
     private HttpClient CreateClient() => _httpClientFactory.CreateClient("KSeF");
 
-    #region Get Invoices
-
     public async Task<InvoiceQueryResponse> GetInvoicesAsync(InvoiceQueryRequest request, CancellationToken ct = default)
     {
         EnsureAuthenticated();
         await _authService.RefreshTokenIfNeededAsync(ct);
 
-        _logger.LogInformation("Pobieranie faktur...");
-        _logger.LogDebug("Request: {@Request}", request);
-
         var client = CreateClient();
+        var allInvoices = new List<InvoiceMetadata>();
+        var seenIds = new HashSet<string>();
+        var currentFrom = request.DateRange.From;
+        var hasMore = true;
+        var iteration = 0;
+        const int maxIterations = 100;
+        var maxResults = request.MaxResults ?? int.MaxValue;
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "invoices/query/metadata");
-        httpRequest.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
-        httpRequest.Content = new StringContent(
-            JsonSerializer.Serialize(request, _jsonOptions),
-            Encoding.UTF8,
-            "application/json");
+        _logger.LogInformation(
+            "Pobieranie faktur (SubjectType: {Type}, od: {From}, do: {To})",
+            request.SubjectType,
+            request.DateRange.From.ToString("yyyy-MM-dd"),
+            request.DateRange.To.ToString("yyyy-MM-dd"));
 
-        var response = await client.SendAsync(httpRequest, ct);
-        var content = await response.Content.ReadAsStringAsync(ct);
+        while (hasMore && iteration < maxIterations && allInvoices.Count < maxResults)
+        {
+            iteration++;
 
-        _logger.LogInformation("Response: {Status}", response.StatusCode);
+            var pageRequest = new InvoiceQueryRequest
+            {
+                SubjectType = request.SubjectType,
+                DateRange = new DateRangeFilter
+                {
+                    DateType = request.DateRange.DateType,
+                    From = currentFrom,
+                    To = request.DateRange.To
+                },
+                AmountFrom = request.AmountFrom,
+                AmountTo = request.AmountTo,
+                ContractorNip = request.ContractorNip,
+                ContractorName = request.ContractorName,
+                InvoiceNumber = request.InvoiceNumber,
+                Currency = request.Currency
+            };
 
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"Błąd pobierania faktur: {response.StatusCode} - {content}");
+            using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, "invoices/query/metadata"))
+            {
+                httpRequest.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
+                httpRequest.Content = new StringContent(
+                    JsonSerializer.Serialize(pageRequest, _jsonOptions),
+                    Encoding.UTF8,
+                    "application/json");
 
-        var result = JsonSerializer.Deserialize<InvoiceQueryResponse>(content, _jsonOptions)!;
-        _logger.LogInformation("Pobrano {Count} faktur", result.Invoices.Count);
+                var response = await client.SendAsync(httpRequest, ct);
+                var content = await response.Content.ReadAsStringAsync(ct);
 
-        return result;
+                if (!response.IsSuccessStatusCode)
+                    throw new HttpRequestException($"Błąd pobierania faktur: {response.StatusCode} - {content}");
+
+                var result = JsonSerializer.Deserialize<InvoiceQueryResponse>(content, _jsonOptions)!;
+
+                var newCount = 0;
+                foreach (var invoice in result.Invoices)
+                {
+                    if (seenIds.Add(invoice.KsefNumber))
+                    {
+                        allInvoices.Add(invoice);
+                        newCount++;
+
+                        if (allInvoices.Count >= maxResults)
+                            break;
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Strona {Page}: +{New} nowych (łącznie: {Total}, hasMore: {HasMore})",
+                    iteration, newCount, allInvoices.Count, result.HasMore);
+
+                hasMore = result.HasMore;
+
+                if (hasMore)
+                {
+                    if (result.PermanentStorageHwmDate.HasValue)
+                    {
+                        var newFrom = result.PermanentStorageHwmDate.Value;
+                        if (newFrom <= currentFrom && newCount == 0)
+                        {
+                            _logger.LogWarning("Kursor nie postępuje, przerywanie pętli paginacji");
+                            break;
+                        }
+                        currentFrom = newFrom;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Brak daty kursora mimo hasMore=true, przerywanie");
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (iteration >= maxIterations)
+            _logger.LogWarning("Osiągnięto limit iteracji ({Max}), pobrano {Count} faktur", maxIterations, allInvoices.Count);
+
+        if (request.SortDescending)
+        {
+            allInvoices = allInvoices
+                .OrderByDescending(i => i.PermanentStorageDate ?? i.InvoicingDate ?? DateTime.MinValue)
+                .ToList();
+        }
+        else
+        {
+            allInvoices = allInvoices
+                .OrderBy(i => i.PermanentStorageDate ?? i.InvoicingDate ?? DateTime.MinValue)
+                .ToList();
+        }
+
+        _logger.LogInformation(
+            "Pobieranie zakończone: {Count} faktur w {Iterations} iteracjach",
+            allInvoices.Count, iteration);
+
+        return new InvoiceQueryResponse
+        {
+            HasMore = false,
+            IsTruncated = allInvoices.Count >= maxResults,
+            Invoices = allInvoices,
+            TotalCount = allInvoices.Count,
+            FetchedAt = DateTime.UtcNow,
+            PagesProcessed = iteration
+        };
     }
 
-    #endregion
+    public async Task<InvoiceStatsResponse> GetInvoiceStatsAsync(int months = 3, CancellationToken ct = default)
+    {
+        EnsureAuthenticated();
+
+        var now = DateTime.UtcNow;
+        var from = now.AddMonths(-months);
+
+        var issuedRequest = new InvoiceQueryRequest
+        {
+            SubjectType = "Subject1",
+            DateRange = new DateRangeFilter { DateType = "PermanentStorage", From = from, To = now },
+            SortDescending = true
+        };
+
+        var receivedRequest = new InvoiceQueryRequest
+        {
+            SubjectType = "Subject2",
+            DateRange = new DateRangeFilter { DateType = "PermanentStorage", From = from, To = now },
+            SortDescending = true
+        };
+
+        var issuedTask = GetInvoicesAsync(issuedRequest, ct);
+        var receivedTask = GetInvoicesAsync(receivedRequest, ct);
+
+        await Task.WhenAll(issuedTask, receivedTask);
+
+        var issued = issuedTask.Result.Invoices;
+        var received = receivedTask.Result.Invoices;
+
+        var stats = new InvoiceStatsResponse
+        {
+            IssuedCount = issued.Count,
+            ReceivedCount = received.Count,
+            IssuedNetTotal = issued.Sum(i => i.NetAmount ?? 0),
+            IssuedGrossTotal = issued.Sum(i => i.GrossAmount ?? 0),
+            ReceivedNetTotal = received.Sum(i => i.NetAmount ?? 0),
+            ReceivedGrossTotal = received.Sum(i => i.GrossAmount ?? 0),
+            PeriodFrom = from,
+            PeriodTo = now,
+            FetchedAt = DateTime.UtcNow
+        };
+
+        var allMonths = Enumerable.Range(0, months)
+            .Select(i => now.AddMonths(-i))
+            .Select(d => d.ToString("yyyy-MM"))
+            .Reverse()
+            .ToList();
+
+        foreach (var month in allMonths)
+        {
+            var monthIssued = issued.Where(i => GetMonth(i) == month).ToList();
+            var monthReceived = received.Where(i => GetMonth(i) == month).ToList();
+
+            stats.Monthly.Add(new MonthlyStats
+            {
+                Month = month,
+                IssuedCount = monthIssued.Count,
+                ReceivedCount = monthReceived.Count,
+                IssuedGross = monthIssued.Sum(i => i.GrossAmount ?? 0),
+                ReceivedGross = monthReceived.Sum(i => i.GrossAmount ?? 0)
+            });
+        }
+
+        var contractorCounts = received
+            .Where(i => i.Seller?.Nip != null)
+            .GroupBy(i => i.Seller!.Nip!)
+            .OrderByDescending(g => g.Count())
+            .Take(10)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        stats.TopContractors = contractorCounts;
+
+        var allInvoices = issued.Concat(received).ToList();
+        var currencyGroups = allInvoices
+            .GroupBy(i => i.Currency ?? "PLN")
+            .ToDictionary(
+                g => g.Key,
+                g => new CurrencyStats
+                {
+                    Count = g.Count(),
+                    NetTotal = g.Sum(i => i.NetAmount ?? 0),
+                    GrossTotal = g.Sum(i => i.GrossAmount ?? 0)
+                });
+
+        stats.ByCurrency = currencyGroups;
+
+        return stats;
+    }
+
+    private static string GetMonth(InvoiceMetadata invoice)
+    {
+        var date = invoice.PermanentStorageDate
+            ?? invoice.InvoicingDate
+            ?? (DateTime.TryParse(invoice.IssueDate, out var parsed) ? parsed : DateTime.MinValue);
+        return date.ToString("yyyy-MM");
+    }
 
     public async Task<InvoiceDetailsResult> GetInvoiceDetailsAsync(string ksefNumber, CancellationToken ct = default)
     {
@@ -87,7 +278,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         {
             var client = CreateClient();
 
-            // Endpoint do pobierania faktury - próbujemy różne warianty
             var endpoints = new[]
             {
                 $"online/Invoice/Get/{ksefNumber}",
@@ -101,12 +291,13 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             foreach (var endpoint in endpoints)
             {
                 _logger.LogDebug("Próbuję endpoint: {Endpoint}", endpoint);
-                
-                using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-                request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
 
-                response = await client.SendAsync(request, ct);
-                content = await response.Content.ReadAsStringAsync(ct);
+                using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
+                {
+                    request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
+                    response = await client.SendAsync(request, ct);
+                    content = await response.Content.ReadAsStringAsync(ct);
+                }
 
                 _logger.LogDebug("Endpoint {Endpoint} - Status: {Status}", endpoint, response.StatusCode);
 
@@ -119,39 +310,30 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
             if (response == null || !response.IsSuccessStatusCode)
             {
-                _logger.LogError("Błąd pobierania faktury ze wszystkich endpointów. Ostatni status: {Status}", 
+                _logger.LogError(
+                    "Błąd pobierania faktury ze wszystkich endpointów. Ostatni status: {Status}",
                     response?.StatusCode);
-                return new InvoiceDetailsResult 
-                { 
-                    Success = false, 
-                    Error = $"Nie można pobrać faktury z KSeF: {response?.StatusCode}" 
+                return new InvoiceDetailsResult
+                {
+                    Success = false,
+                    Error = $"Nie można pobrać faktury z KSeF: {response?.StatusCode}"
                 };
             }
 
-            _logger.LogDebug("Response content: {Content}", content?.Substring(0, Math.Min(500, content?.Length ?? 0)));
-
             var detailsResponse = JsonSerializer.Deserialize<InvoiceDetailsResponse>(content!, _jsonOptions);
-            
+
             if (detailsResponse == null)
-            {
                 return new InvoiceDetailsResult { Success = false, Error = "Pusta odpowiedź z KSeF" };
-            }
 
-            // Wyciągnij hash
             var invoiceHash = detailsResponse.InvoiceHash?.HashSHA?.Value ?? "";
-            
-            // Wyciągnij i zdekoduj XML
             var invoiceXml = DecodeInvoiceBody(detailsResponse.InvoicePayload?.InvoiceBody);
-            
-            if (string.IsNullOrEmpty(invoiceXml))
-            {
-                return new InvoiceDetailsResult { Success = false, Error = "Brak XML faktury w odpowiedzi" };
-            }
 
-            // Parsuj XML
+            if (string.IsNullOrEmpty(invoiceXml))
+                return new InvoiceDetailsResult { Success = false, Error = "Brak XML faktury w odpowiedzi" };
+
             var result = ParseInvoiceXml(invoiceXml, ksefNumber, invoiceHash);
             result.Success = true;
-            
+
             return result;
         }
         catch (Exception ex)
@@ -168,13 +350,11 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
         try
         {
-            // Próbuj zdekodować Base64
             var bytes = Convert.FromBase64String(invoiceBody);
             return Encoding.UTF8.GetString(bytes);
         }
         catch
         {
-            // Już jest stringiem XML
             return invoiceBody;
         }
     }
@@ -194,7 +374,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             Items = new List<InvoiceItemResult>()
         };
 
-        // Sprzedawca (Podmiot1)
         var podmiot1 = doc.Descendants(ns + "Podmiot1").FirstOrDefault();
         if (podmiot1 != null)
         {
@@ -205,7 +384,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             result.SellerAddress = adres1?.Element(ns + "AdresL1")?.Value;
         }
 
-        // Nabywca (Podmiot2)
         var podmiot2 = doc.Descendants(ns + "Podmiot2").FirstOrDefault();
         if (podmiot2 != null)
         {
@@ -216,18 +394,17 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             result.BuyerAddress = adres2?.Element(ns + "AdresL1")?.Value;
         }
 
-        // Pozycje
         var wiersze = doc.Descendants(ns + "FaWiersz");
         foreach (var wiersz in wiersze)
         {
-            decimal.TryParse(wiersz.Element(ns + "P_8B")?.Value, System.Globalization.NumberStyles.Any, 
+            decimal.TryParse(wiersz.Element(ns + "P_8B")?.Value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var qty);
-            decimal.TryParse(wiersz.Element(ns + "P_9A")?.Value, System.Globalization.NumberStyles.Any, 
+            decimal.TryParse(wiersz.Element(ns + "P_9A")?.Value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var price);
-            decimal.TryParse(wiersz.Element(ns + "P_11")?.Value, System.Globalization.NumberStyles.Any, 
+            decimal.TryParse(wiersz.Element(ns + "P_11")?.Value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var netValue);
             var vatRate = wiersz.Element(ns + "P_12")?.Value ?? "23";
-            
+
             var vatValue = CalculateVatFromRate(netValue, vatRate);
 
             result.Items.Add(new InvoiceItemResult
@@ -243,17 +420,16 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             });
         }
 
-        // Sumy
         var fa = doc.Descendants(ns + "Fa").FirstOrDefault();
         if (fa != null)
         {
-            decimal.TryParse(fa.Element(ns + "P_13_1")?.Value, System.Globalization.NumberStyles.Any, 
+            decimal.TryParse(fa.Element(ns + "P_13_1")?.Value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var net);
-            decimal.TryParse(fa.Element(ns + "P_14_1")?.Value, System.Globalization.NumberStyles.Any, 
+            decimal.TryParse(fa.Element(ns + "P_14_1")?.Value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var vat);
-            decimal.TryParse(fa.Element(ns + "P_15")?.Value, System.Globalization.NumberStyles.Any, 
+            decimal.TryParse(fa.Element(ns + "P_15")?.Value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var gross);
-            
+
             result.NetTotal = net;
             result.VatTotal = vat;
             result.GrossTotal = gross;
@@ -264,7 +440,7 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
     private decimal CalculateVatFromRate(decimal net, string vatRate)
     {
-        if (decimal.TryParse(vatRate, System.Globalization.NumberStyles.Any, 
+        if (decimal.TryParse(vatRate, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var rate))
             return Math.Round(net * rate / 100, 2);
 
@@ -275,14 +451,11 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         };
     }
 
-    #region Open Online Session
-
     public async Task<SessionResult> OpenOnlineSessionAsync(CancellationToken ct = default)
     {
         EnsureAuthenticated();
         await _authService.RefreshTokenIfNeededAsync(ct);
 
-        // Sprawdź czy jest już aktywna sesja
         if (_session.HasActiveOnlineSession)
         {
             _logger.LogInformation("Używam istniejącej sesji: {Ref}", _session.SessionReferenceNumber);
@@ -302,7 +475,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
             var client = CreateClient();
 
-            // Pobierz certyfikat SymmetricKeyEncryption
             _logger.LogInformation("Krok 1: Pobieranie certyfikatu SymmetricKeyEncryption...");
             var certificates = _session.GetCachedCertificates()
                 ?? await GetCertificatesAsync(client, ct);
@@ -310,18 +482,15 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             var symCert = certificates.First(c => c.Usage?.Contains("SymmetricKeyEncryption") == true);
             _logger.LogInformation("  ✓ Certyfikat pobrany");
 
-            // Generuj klucz AES i IV
             _logger.LogInformation("Krok 2: Generowanie klucza AES-256 i IV...");
             var (aesKey, iv) = _cryptoService.GenerateAesKeyAndIv();
             _logger.LogInformation("  ✓ Klucz AES: {KeyLen} bajtów, IV: {IvLen} bajtów", aesKey.Length, iv.Length);
 
-            // Zaszyfruj klucz AES certyfikatem
             _logger.LogInformation("Krok 3: Szyfrowanie klucza AES (RSA-OAEP SHA-256)...");
             var encryptedSymmetricKey = _cryptoService.EncryptAesKey(aesKey, symCert.Certificate);
             var ivBase64 = Convert.ToBase64String(iv);
             _logger.LogInformation("  ✓ Klucz zaszyfrowany");
 
-            // POST /sessions/online
             _logger.LogInformation("Krok 4: POST /sessions/online");
             var requestBody = new
             {
@@ -358,7 +527,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
             var sessionResponse = JsonSerializer.Deserialize<OpenSessionResponse>(content, _jsonOptions)!;
 
-            // Zapisz sesję
             _session.SetOnlineSession(
                 sessionResponse.ReferenceNumber,
                 sessionResponse.ValidUntil,
@@ -385,28 +553,20 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         }
     }
 
-    #endregion
-
-    #region Send Invoice
-
     public async Task<SendInvoiceResult> SendInvoiceAsync(CreateInvoiceRequest invoiceData, CancellationToken ct = default)
     {
         EnsureAuthenticated();
         await _authService.RefreshTokenIfNeededAsync(ct);
 
-        // ===== WALIDACJA NIP SPRZEDAWCY =====
         var sessionNip = _session.Nip;
         if (!string.IsNullOrEmpty(sessionNip) && invoiceData.Seller.Nip != sessionNip)
         {
             _logger.LogWarning(
                 "⚠️ NIP sprzedawcy ({SellerNip}) różni się od NIP sesji ({SessionNip}). Automatycznie poprawiam!",
                 invoiceData.Seller.Nip, sessionNip);
-            
-            // Automatycznie popraw NIP sprzedawcy
             invoiceData.Seller.Nip = sessionNip;
         }
 
-        // Upewnij się że jest otwarta sesja
         if (!_session.HasActiveOnlineSession)
         {
             var sessionResult = await OpenOnlineSessionAsync(ct);
@@ -428,26 +588,21 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             var iv = _session.Iv!;
             var sessionRef = _session.SessionReferenceNumber!;
 
-            // Krok 1: Wygeneruj XML
             _logger.LogInformation("Krok 1: Generowanie XML faktury...");
             var invoiceXml = _xmlGenerator.GenerateInvoiceXml(invoiceData, sessionNip);
-            
-            // Loguj wygenerowany XML (dla debugowania)
+
             _logger.LogDebug("════════════════════════════════════════════════════════════════");
             _logger.LogDebug("WYGENEROWANY XML:");
             _logger.LogDebug("{Xml}", invoiceXml);
             _logger.LogDebug("════════════════════════════════════════════════════════════════");
-            
-            // WAŻNE: UTF-8 bez BOM!
+
             var invoiceBytes = new UTF8Encoding(false).GetBytes(invoiceXml);
             _logger.LogInformation("  ✓ XML wygenerowany: {Size} bajtów", invoiceBytes.Length);
 
-            // Krok 2: Oblicz hash oryginalnej faktury
             _logger.LogInformation("Krok 2: Obliczanie hash SHA-256 faktury...");
             var invoiceHash = _cryptoService.ComputeSha256Base64(invoiceBytes);
             _logger.LogInformation("  ✓ Hash: {Hash}", invoiceHash);
 
-            // Krok 3: Zaszyfruj fakturę AES-256-CBC
             _logger.LogInformation("Krok 3: Szyfrowanie faktury (AES-256-CBC)...");
             var encryptedInvoice = _cryptoService.EncryptInvoiceXml(invoiceXml, aesKey, iv);
             var encryptedInvoiceHash = _cryptoService.ComputeSha256Base64(encryptedInvoice);
@@ -455,7 +610,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             _logger.LogInformation("  ✓ Zaszyfrowano: {OrigSize} -> {EncSize} bajtów",
                 invoiceBytes.Length, encryptedInvoice.Length);
 
-            // Krok 4: Wyślij fakturę
             _logger.LogInformation("Krok 4: POST /sessions/online/{Ref}/invoices", sessionRef);
             var requestBody = new
             {
@@ -467,7 +621,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                 offlineMode = false
             };
 
-            // Loguj request body (dla debugowania)
             _logger.LogDebug("Request body: {Body}", JsonSerializer.Serialize(requestBody, _jsonOptions));
 
             var url = $"sessions/online/{sessionRef}/invoices";
@@ -492,8 +645,7 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                 _logger.LogError("  Status: {Status}", response.StatusCode);
                 _logger.LogError("  Response: {Content}", content);
                 _logger.LogError("════════════════════════════════════════════════════════════════");
-                
-                // Spróbuj sparsować błąd KSeF
+
                 var errorMessage = ParseKsefError(content) ?? content;
                 return new SendInvoiceResult { Success = false, Error = errorMessage };
             }
@@ -523,9 +675,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         }
     }
 
-    /// <summary>
-    /// Próbuje wyciągnąć czytelny komunikat błędu z odpowiedzi KSeF
-    /// </summary>
     private string? ParseKsefError(string responseContent)
     {
         try
@@ -533,47 +682,33 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             using var doc = JsonDocument.Parse(responseContent);
             var root = doc.RootElement;
 
-            // Próbuj różne formaty błędów KSeF
             if (root.TryGetProperty("exception", out var exception))
             {
-                if (exception.TryGetProperty("exceptionDetailList", out var details) && 
+                if (exception.TryGetProperty("exceptionDetailList", out var details) &&
                     details.ValueKind == JsonValueKind.Array &&
                     details.GetArrayLength() > 0)
                 {
                     var firstDetail = details[0];
                     if (firstDetail.TryGetProperty("exceptionDescription", out var desc))
-                    {
                         return desc.GetString();
-                    }
                 }
-                
+
                 if (exception.TryGetProperty("serviceCtx", out var ctx))
-                {
                     return ctx.GetString();
-                }
             }
 
             if (root.TryGetProperty("message", out var message))
-            {
                 return message.GetString();
-            }
 
             if (root.TryGetProperty("error", out var error))
-            {
                 return error.GetString();
-            }
         }
         catch
         {
-            // Ignoruj błędy parsowania
         }
 
         return null;
     }
-
-    #endregion
-
-    #region Close Session
 
     public async Task<bool> CloseOnlineSessionAsync(CancellationToken ct = default)
     {
@@ -617,10 +752,6 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         }
     }
 
-    #endregion
-
-    #region Helpers
-
     private void EnsureAuthenticated()
     {
         if (!_session.IsAuthenticated)
@@ -640,6 +771,4 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
         return certificates;
     }
-
-    #endregion
 }
