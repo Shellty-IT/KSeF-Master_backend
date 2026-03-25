@@ -1,3 +1,4 @@
+// Program.cs
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces;
 
@@ -47,7 +48,14 @@ builder.Services.AddHttpClient("KSeF", client =>
 })
 .AddHttpMessageHandler<KSeFHttpLoggingHandler>();
 
+builder.Services.AddHttpClient("SmartQuoteWebhook", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+
 builder.Services.AddSingleton<KSeFSessionManager>();
+builder.Services.AddSingleton<IExternalDraftService, ExternalDraftService>();
 builder.Services.AddScoped<IKSeFCryptoService, KSeFCryptoService>();
 builder.Services.AddScoped<IKSeFAuthService, KSeFAuthService>();
 builder.Services.AddScoped<IKSeFInvoiceService, KSeFInvoiceService>();
