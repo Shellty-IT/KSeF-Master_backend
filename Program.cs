@@ -182,3 +182,4 @@ app.Logger.LogInformation("Swagger UI: {Url}/swagger", url);
 app.Logger.LogInformation("KSeF API: {KSeFUrl}", ksefBaseUrl);
 
 app.Run(url);
+
