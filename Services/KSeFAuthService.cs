@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿//KSeFAuthService.cs
+using System.Text;
 using System.Text.Json;
 using KSeF.Backend.Models.Responses;
 using KSeF.Backend.Services.Interfaces;

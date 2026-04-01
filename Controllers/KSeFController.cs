@@ -1,7 +1,8 @@
 ﻿// Controllers/KSeFController.cs
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using KSeF.Backend.Models.Requests;
-using KSeF.Backend.Models.Responses;
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces;
 
@@ -37,12 +38,13 @@ public class KSeFController : ControllerBase
             server = "OK",
             timestamp = DateTime.UtcNow,
             environment = "KSeF Test (ksef-test.mf.gov.pl)",
-            version = "1.1.0",
+            version = "2.0.0",
             session = _session.GetSessionInfo()
         });
     }
 
     [HttpPost("login")]
+    [Authorize]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
         _logger.LogInformation("=== LOGIN REQUEST ===");
@@ -93,6 +95,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpPost("logout")]
+    [Authorize]
     public IActionResult Logout()
     {
         var nip = _session.Nip;
@@ -102,6 +105,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpPost("invoices")]
+    [Authorize]
     public async Task<IActionResult> GetInvoices([FromBody] InvoiceQueryRequest request, CancellationToken ct)
     {
         _logger.LogInformation("=== GET INVOICES REQUEST ===");
@@ -128,6 +132,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpGet("invoices/stats")]
+    [Authorize]
     public async Task<IActionResult> GetInvoiceStats(
         [FromQuery] int months = 3,
         CancellationToken ct = default)
@@ -155,6 +160,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpPost("session/open")]
+    [Authorize]
     public async Task<IActionResult> OpenSession(CancellationToken ct)
     {
         _logger.LogInformation("=== OPEN SESSION REQUEST ===");
@@ -189,6 +195,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpPost("session/close")]
+    [Authorize]
     public IActionResult CloseSession()
     {
         _session.ClearOnlineSession();
@@ -196,6 +203,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpPost("invoice/send")]
+    [Authorize]
     public async Task<IActionResult> SendInvoice([FromBody] CreateInvoiceRequest request, CancellationToken ct)
     {
         _logger.LogInformation("=== SEND INVOICE REQUEST ===");
@@ -237,6 +245,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpPost("invoice/pdf")]
+    [Authorize]
     public IActionResult GeneratePdf(
         [FromBody] GeneratePdfRequest request,
         [FromServices] IPdfGeneratorService pdfService)
@@ -261,6 +270,7 @@ public class KSeFController : ControllerBase
     }
 
     [HttpGet("invoice/{ksefNumber}")]
+    [Authorize]
     public async Task<IActionResult> GetInvoiceDetails(string ksefNumber, CancellationToken ct)
     {
         _logger.LogInformation("=== GET INVOICE DETAILS: {KsefNumber} ===", ksefNumber);
