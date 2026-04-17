@@ -1,28 +1,23 @@
-﻿using KSeF.Backend.Models.Responses;
+﻿// Services/KSeFSessionManager.cs
+using KSeF.Backend.Models.Responses;
 
 namespace KSeF.Backend.Services;
 
-/// <summary>
-/// Przechowuje stan sesji KSeF w pamięci (Singleton)
-/// </summary>
 public class KSeFSessionManager
 {
     private readonly object _lock = new();
 
-    // Auth tokens
     private string? _accessToken;
     private DateTime? _accessTokenValidUntil;
     private string? _refreshToken;
     private DateTime? _refreshTokenValidUntil;
     private string? _nip;
 
-    // Online session (do wysyłki faktur)
     private string? _sessionReferenceNumber;
     private DateTime? _sessionValidUntil;
     private byte[]? _aesKey;
     private byte[]? _iv;
 
-    // Cached certificates
     private List<CertificateInfo>? _certificates;
     private DateTime? _certificatesCachedAt;
 
@@ -72,7 +67,6 @@ public class KSeFSessionManager
         {
             lock (_lock)
             {
-                // Odśwież jeśli accessToken wygasa za mniej niż 2 minuty
                 return _accessTokenValidUntil.HasValue &&
                        _accessTokenValidUntil.Value < DateTime.UtcNow.AddMinutes(2) &&
                        !string.IsNullOrEmpty(_refreshToken) &&
@@ -91,6 +85,18 @@ public class KSeFSessionManager
             _accessTokenValidUntil = tokens.AccessToken?.ValidUntil;
             _refreshToken = tokens.RefreshToken?.Token;
             _refreshTokenValidUntil = tokens.RefreshToken?.ValidUntil;
+        }
+    }
+
+    public void SetAuthSessionFromStatus(string nip, AuthStatusResponse status)
+    {
+        lock (_lock)
+        {
+            _nip = nip;
+            _accessToken = status.AccessToken?.Token;
+            _accessTokenValidUntil = status.AccessToken?.ValidUntil;
+            _refreshToken = status.RefreshToken?.Token;
+            _refreshTokenValidUntil = status.RefreshToken?.ValidUntil;
         }
     }
 
@@ -118,7 +124,7 @@ public class KSeFSessionManager
 
     #endregion
 
-    #region Online Session (Invoice Sending)
+    #region Online Session
 
     public bool HasActiveOnlineSession
     {
@@ -190,7 +196,6 @@ public class KSeFSessionManager
     {
         lock (_lock)
         {
-            // Cache ważny 1 godzinę
             if (_certificates != null &&
                 _certificatesCachedAt.HasValue &&
                 _certificatesCachedAt.Value > DateTime.UtcNow.AddHours(-1))

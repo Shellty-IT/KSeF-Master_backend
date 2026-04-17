@@ -3,6 +3,10 @@ using System.Text.Json.Serialization;
 
 namespace KSeF.Backend.Models.Responses;
 
+// ═══════════════════════════════════════════════════════
+// CERTYFIKATY — GET /security/public-key-certificates
+// ═══════════════════════════════════════════════════════
+
 public class CertificateInfo
 {
     [JsonPropertyName("certificate")]
@@ -18,6 +22,10 @@ public class CertificateInfo
     public List<string>? Usage { get; set; }
 }
 
+// ═══════════════════════════════════════════════════════
+// CHALLENGE — POST /auth/challenge
+// ═══════════════════════════════════════════════════════
+
 public class ChallengeResponse
 {
     [JsonPropertyName("challenge")]
@@ -27,6 +35,10 @@ public class ChallengeResponse
     public DateTime Timestamp { get; set; }
 }
 
+// ═══════════════════════════════════════════════════════
+// AUTH TOKEN — POST /auth/ksef-token
+// ═══════════════════════════════════════════════════════
+
 public class AuthTokenResponse
 {
     [JsonPropertyName("referenceNumber")]
@@ -34,6 +46,13 @@ public class AuthTokenResponse
 
     [JsonPropertyName("authenticationToken")]
     public TokenInfo? AuthenticationToken { get; set; }
+
+    // Nowe API v2 może zwracać status bezpośrednio
+    [JsonPropertyName("processingCode")]
+    public int? ProcessingCode { get; set; }
+
+    [JsonPropertyName("processingDescription")]
+    public string? ProcessingDescription { get; set; }
 }
 
 public class TokenInfo
@@ -45,6 +64,10 @@ public class TokenInfo
     public DateTime ValidUntil { get; set; }
 }
 
+// ═══════════════════════════════════════════════════════
+// AUTH STATUS — GET /auth/{referenceNumber}
+// ═══════════════════════════════════════════════════════
+
 public class AuthStatusResponse
 {
     [JsonPropertyName("startDate")]
@@ -54,10 +77,17 @@ public class AuthStatusResponse
     public string AuthenticationMethod { get; set; } = string.Empty;
 
     [JsonPropertyName("status")]
-    public StatusInfo Status { get; set; } = new();
+    public StatusInfo? Status { get; set; }
 
     [JsonPropertyName("isTokenRedeemed")]
     public bool IsTokenRedeemed { get; set; }
+
+    // v2: może zawierać token bezpośrednio po autoryzacji
+    [JsonPropertyName("accessToken")]
+    public TokenInfo? AccessToken { get; set; }
+
+    [JsonPropertyName("refreshToken")]
+    public TokenInfo? RefreshToken { get; set; }
 }
 
 public class StatusInfo
@@ -69,6 +99,10 @@ public class StatusInfo
     public string Description { get; set; } = string.Empty;
 }
 
+// ═══════════════════════════════════════════════════════
+// TOKEN REDEEM — POST /auth/token/redeem
+// ═══════════════════════════════════════════════════════
+
 public class TokenRedeemResponse
 {
     [JsonPropertyName("accessToken")]
@@ -78,11 +112,19 @@ public class TokenRedeemResponse
     public TokenInfo? RefreshToken { get; set; }
 }
 
+// ═══════════════════════════════════════════════════════
+// TOKEN REFRESH — POST /auth/token/refresh
+// ═══════════════════════════════════════════════════════
+
 public class TokenRefreshResponse
 {
     [JsonPropertyName("accessToken")]
     public TokenInfo? AccessToken { get; set; }
 }
+
+// ═══════════════════════════════════════════════════════
+// SESSION — POST /invoices/sending/interactive
+// ═══════════════════════════════════════════════════════
 
 public class OpenSessionResponse
 {
@@ -92,6 +134,10 @@ public class OpenSessionResponse
     [JsonPropertyName("validUntil")]
     public DateTime ValidUntil { get; set; }
 }
+
+// ═══════════════════════════════════════════════════════
+// INVOICE QUERY — POST /invoices/query
+// ═══════════════════════════════════════════════════════
 
 public class InvoiceQueryResponse
 {
@@ -213,6 +259,10 @@ public class FormCodeInfo
     public string Value { get; set; } = string.Empty;
 }
 
+// ═══════════════════════════════════════════════════════
+// SEND INVOICE
+// ═══════════════════════════════════════════════════════
+
 public class SendInvoiceApiResponse
 {
     [JsonPropertyName("elementReferenceNumber")]
@@ -230,6 +280,10 @@ public class SendInvoiceApiResponse
     [JsonPropertyName("timestamp")]
     public DateTime? Timestamp { get; set; }
 }
+
+// ═══════════════════════════════════════════════════════
+// INVOICE DETAILS
+// ═══════════════════════════════════════════════════════
 
 public class InvoiceDetailsResponse
 {
@@ -275,6 +329,10 @@ public class InvoicePayloadInfo
     [JsonPropertyName("invoiceBody")]
     public string? InvoiceBody { get; set; }
 }
+
+// ═══════════════════════════════════════════════════════
+// RESULT TYPES (wewnętrzne — nie mylić z KSeF API)
+// ═══════════════════════════════════════════════════════
 
 public class AuthResult
 {
@@ -335,6 +393,10 @@ public class InvoiceItemResult
     public decimal VatValue { get; set; }
     public decimal GrossValue { get; set; }
 }
+
+// ═══════════════════════════════════════════════════════
+// STATYSTYKI
+// ═══════════════════════════════════════════════════════
 
 public class InvoiceStatsResponse
 {

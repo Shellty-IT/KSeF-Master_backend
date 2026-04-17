@@ -92,7 +92,7 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 var ksefBaseUrl = builder.Configuration.GetValue<string>("KSeF:BaseUrl")
-    ?? "https://ksef-test.mf.gov.pl/api/v2/";
+    ?? "https://api-test.ksef.mf.gov.pl/v2";
 var timeoutSeconds = builder.Configuration.GetValue<int>("KSeF:TimeoutSeconds", 60);
 
 builder.Services.AddTransient<KSeFHttpLoggingHandler>();
