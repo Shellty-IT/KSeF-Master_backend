@@ -1,5 +1,4 @@
-﻿// Controllers/KSeFController.cs
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using KSeF.Backend.Models.Requests;
@@ -109,6 +108,8 @@ public class KSeFController : ControllerBase
     public async Task<IActionResult> GetInvoices([FromBody] InvoiceQueryRequest request, CancellationToken ct)
     {
         _logger.LogInformation("=== GET INVOICES REQUEST ===");
+        _logger.LogInformation("SubjectType: {Type}, DateType: {DateType}, From: {From}, To: {To}",
+            request.SubjectType, request.DateRange?.DateType, request.DateRange?.From, request.DateRange?.To);
 
         var validationErrors = ValidateInvoiceQuery(request);
         if (validationErrors.Count > 0)
@@ -117,6 +118,10 @@ public class KSeFController : ControllerBase
         try
         {
             var result = await _invoiceService.GetInvoicesAsync(request, ct);
+            
+            _logger.LogInformation("Zwrócono {Count} faktur (SubjectType: {Type}, DateType: {DateType})",
+                result.TotalCount, request.SubjectType, request.DateRange.DateType);
+            
             return Ok(new { success = true, data = result });
         }
         catch (UnauthorizedAccessException ex)
@@ -332,6 +337,13 @@ public class KSeFController : ControllerBase
             var maxRange = TimeSpan.FromDays(366);
             if (request.DateRange.To - request.DateRange.From > maxRange)
                 errors.Add("Zakres dat nie może przekraczać 12 miesięcy");
+            
+            if (string.IsNullOrWhiteSpace(request.DateRange.DateType))
+                errors.Add("DateRange.DateType jest wymagany");
+            
+            var validDateTypes = new[] { "InvoicingDate", "PermanentStorage", "AcquisitionTimestamp" };
+            if (!validDateTypes.Contains(request.DateRange.DateType))
+                errors.Add($"DateRange.DateType musi być jednym z: {string.Join(", ", validDateTypes)}");
         }
 
         if (request.AmountFrom.HasValue && request.AmountTo.HasValue && request.AmountFrom > request.AmountTo)

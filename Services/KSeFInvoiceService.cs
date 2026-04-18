@@ -50,17 +50,22 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         var client = CreateClient();
         var allInvoices = new List<InvoiceMetadata>();
         var seenIds = new HashSet<string>();
-        var hasMore = true;
-        var iteration = 0;
-        const int maxIterations = 50;
         var maxResults = request.MaxResults ?? int.MaxValue;
 
+        var sortOrder = request.SortDescending ? "Desc" : "Asc";
+        var pageOffset = 0;
+        const int pageSize = 100;
+        var hasMore = true;
+        var iteration = 0;
+        const int maxIterations = 200;
+
         var currentFrom = request.DateRange.From.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-        var originalTo = request.DateRange.To.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        var currentTo = request.DateRange.To.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        var originalFrom = currentFrom;
 
         _logger.LogInformation(
-            "Pobieranie faktur (SubjectType: {Type}, dateType: {DateType}, od: {From}, do: {To})",
-            request.SubjectType, request.DateRange.DateType, currentFrom, originalTo);
+            "Pobieranie faktur (SubjectType: {Type}, dateType: {DateType}, od: {From}, do: {To}, sortOrder: {Sort})",
+            request.SubjectType, request.DateRange.DateType, currentFrom, currentTo, sortOrder);
 
         while (hasMore && iteration < maxIterations && allInvoices.Count < maxResults)
         {
@@ -73,13 +78,15 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                 {
                     dateType = request.DateRange.DateType,
                     from = currentFrom,
-                    to = originalTo
+                    to = currentTo
                 }
             });
 
-            _logger.LogDebug("Strona {Page} request body: {Body}", iteration, requestBodyJson);
+            var url = $"invoices/query/metadata?sortOrder={sortOrder}&pageOffset={pageOffset}&pageSize={pageSize}";
 
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "invoices/query/metadata");
+            _logger.LogDebug("Iter {Iter}: pageOffset={Offset}, from={From}, to={To}", iteration, pageOffset, currentFrom, currentTo);
+
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
             httpRequest.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
             httpRequest.Content = new StringContent(requestBodyJson, Encoding.UTF8, "application/json");
 
@@ -89,19 +96,21 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             if (!response.IsSuccessStatusCode)
                 throw new HttpRequestException($"Błąd pobierania faktur: {response.StatusCode} - {content}");
 
-            _logger.LogDebug("Strona {Page} raw response ({Len} chars): {Content}",
+            _logger.LogDebug("Iter {Iter} raw response ({Len} chars): {Content}",
                 iteration, content.Length, content.Length > 2000 ? content[..2000] + "..." : content);
 
             using var doc = JsonDocument.Parse(content);
             var root = doc.RootElement;
 
             var pageHasMore = root.TryGetProperty("hasMore", out var hasMoreEl) && hasMoreEl.GetBoolean();
+            var pageIsTruncated = root.TryGetProperty("isTruncated", out var truncEl) && truncEl.GetBoolean();
 
-            string? rawHwmDate = null;
+            string? permanentStorageHwmDate = null;
             if (root.TryGetProperty("permanentStorageHwmDate", out var hwmEl) && hwmEl.ValueKind == JsonValueKind.String)
-                rawHwmDate = hwmEl.GetString();
+                permanentStorageHwmDate = hwmEl.GetString();
 
             var newCount = 0;
+            var lastInvoiceDate = string.Empty;
 
             if (root.TryGetProperty("invoices", out var invoicesEl) && invoicesEl.ValueKind == JsonValueKind.Array)
             {
@@ -110,10 +119,14 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                     var invoice = JsonSerializer.Deserialize<InvoiceMetadata>(invEl.GetRawText(), _jsonOptions);
                     if (invoice == null) continue;
 
+                    if (invEl.TryGetProperty("invoicingMode", out var modeEl))
+                        _logger.LogDebug("Faktura {KSeF}: invoicingMode={Mode}", invoice.KsefNumber, modeEl.GetString());
+
                     if (seenIds.Add(invoice.KsefNumber))
                     {
                         allInvoices.Add(invoice);
                         newCount++;
+                        lastInvoiceDate = GetInvoiceDateForCursor(invoice, request.DateRange.DateType);
 
                         if (allInvoices.Count >= maxResults)
                             break;
@@ -122,45 +135,46 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             }
 
             _logger.LogInformation(
-                "Strona {Page}: +{New} nowych (łącznie: {Total}, hasMore: {HasMore}, hwm: {Hwm})",
-                iteration, newCount, allInvoices.Count, pageHasMore, rawHwmDate ?? "null");
+                "Iter {Iter}: +{New} faktur (łącznie: {Total}, hasMore: {HasMore}, isTruncated: {Truncated}, pageOffset: {Offset}, hwm: {Hwm})",
+                iteration, newCount, allInvoices.Count, pageHasMore, pageIsTruncated, pageOffset, permanentStorageHwmDate ?? "null");
 
-            hasMore = pageHasMore;
-
-            if (hasMore)
+            if (!pageHasMore)
             {
-                if (!string.IsNullOrEmpty(rawHwmDate))
+                hasMore = false;
+                break;
+            }
+
+            if (allInvoices.Count >= maxResults)
+                break;
+
+            if (pageIsTruncated)
+            {
+                if (string.IsNullOrEmpty(lastInvoiceDate))
                 {
-                    var normalizedHwm = NormalizeToUtcString(rawHwmDate);
-
-                    if (normalizedHwm == currentFrom)
-                    {
-                        if (newCount == 0)
-                        {
-                            _logger.LogWarning("Kursor nie postępuje (hwm == from) i 0 nowych, przerywanie");
-                            break;
-                        }
-
-                        if (DateTimeOffset.TryParse(rawHwmDate, out var parsed))
-                        {
-                            normalizedHwm = parsed.AddMilliseconds(1).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ");
-                            _logger.LogInformation("Kursor == from, przesuwam o 1ms: {NewFrom}", normalizedHwm);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("Nie można sparsować HWM, przerywanie");
-                            break;
-                        }
-                    }
-
-                    currentFrom = normalizedHwm;
-                    _logger.LogInformation("Następna strona: from = {From}", currentFrom);
-                }
-                else
-                {
-                    _logger.LogWarning("Brak permanentStorageHwmDate mimo hasMore=true, przerywanie");
+                    _logger.LogWarning("isTruncated=true ale brak daty ostatniej faktury, przerywanie");
                     break;
                 }
+
+                var newFrom = NormalizeToUtcString(lastInvoiceDate);
+                if (newFrom == currentFrom)
+                {
+                    if (DateTimeOffset.TryParse(lastInvoiceDate, out var parsedDate))
+                        newFrom = parsedDate.AddMilliseconds(1).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ");
+                    else
+                    {
+                        _logger.LogWarning("Nie można przesunąć kursora, przerywanie");
+                        break;
+                    }
+                }
+
+                _logger.LogInformation("isTruncated=true: zawężam zakres from: {OldFrom} → {NewFrom}", currentFrom, newFrom);
+                currentFrom = newFrom;
+                pageOffset = 0;
+            }
+            else
+            {
+                pageOffset += pageSize;
+                _logger.LogInformation("hasMore=true, isTruncated=false: następna strona pageOffset={Offset}", pageOffset);
             }
         }
 
@@ -170,19 +184,19 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         if (request.SortDescending)
         {
             allInvoices = allInvoices
-                .OrderByDescending(i => i.PermanentStorageDate ?? i.InvoicingDate ?? DateTime.MinValue)
+                .OrderByDescending(i => i.InvoicingDate ?? i.PermanentStorageDate ?? DateTime.MinValue)
                 .ToList();
         }
         else
         {
             allInvoices = allInvoices
-                .OrderBy(i => i.PermanentStorageDate ?? i.InvoicingDate ?? DateTime.MinValue)
+                .OrderBy(i => i.InvoicingDate ?? i.PermanentStorageDate ?? DateTime.MinValue)
                 .ToList();
         }
 
         _logger.LogInformation(
-            "Pobieranie zakończone: {Count} faktur w {Iterations} iteracjach (dateType: {DateType})",
-            allInvoices.Count, iteration, request.DateRange.DateType);
+            "Pobieranie zakończone: {Count} faktur w {Iterations} iteracjach",
+            allInvoices.Count, iteration);
 
         return new InvoiceQueryResponse
         {
@@ -192,6 +206,16 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             TotalCount = allInvoices.Count,
             FetchedAt = DateTime.UtcNow,
             PagesProcessed = iteration
+        };
+    }
+
+    private string GetInvoiceDateForCursor(InvoiceMetadata invoice, string dateType)
+    {
+        return dateType switch
+        {
+            "Issue" => invoice.IssueDate ?? string.Empty,
+            "Invoicing" => invoice.InvoicingDate?.ToString("O") ?? string.Empty,
+            _ => invoice.PermanentStorageDate?.ToString("O") ?? string.Empty
         };
     }
 
@@ -207,39 +231,78 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         EnsureAuthenticated();
 
         var now = DateTime.UtcNow;
-        var from = now.AddMonths(-months);
+        var allIssued = new List<InvoiceMetadata>();
+        var allReceived = new List<InvoiceMetadata>();
 
-        var issuedRequest = new InvoiceQueryRequest
+        var windowCount = Math.Max(1, (int)Math.Ceiling(months / 3.0));
+
+        var issuedTasks = new List<Task<InvoiceQueryResponse>>();
+        var receivedTasks = new List<Task<InvoiceQueryResponse>>();
+
+        for (var i = 0; i < windowCount; i++)
         {
-            SubjectType = "Subject1",
-            DateRange = new DateRangeFilter { DateType = "InvoicingDate", From = from, To = now },
-            SortDescending = true
-        };
+            var windowTo = now.AddMonths(-i * 3);
+            var windowFrom = now.AddMonths(-(i + 1) * 3);
 
-        var receivedRequest = new InvoiceQueryRequest
+            if (windowFrom < now.AddMonths(-months))
+                windowFrom = now.AddMonths(-months);
+
+            var issuedReq = new InvoiceQueryRequest
+            {
+                SubjectType = "Subject1",
+                DateRange = new DateRangeFilter
+                {
+                    DateType = "PermanentStorage",
+                    From = windowFrom,
+                    To = windowTo
+                },
+                SortDescending = false
+            };
+
+            var receivedReq = new InvoiceQueryRequest
+            {
+                SubjectType = "Subject2",
+                DateRange = new DateRangeFilter
+                {
+                    DateType = "PermanentStorage",
+                    From = windowFrom,
+                    To = windowTo
+                },
+                SortDescending = false
+            };
+
+            issuedTasks.Add(GetInvoicesAsync(issuedReq, ct));
+            receivedTasks.Add(GetInvoicesAsync(receivedReq, ct));
+        }
+
+        await Task.WhenAll(issuedTasks.Concat(receivedTasks));
+
+        var seenIssued = new HashSet<string>();
+        var seenReceived = new HashSet<string>();
+
+        foreach (var task in issuedTasks)
         {
-            SubjectType = "Subject2",
-            DateRange = new DateRangeFilter { DateType = "InvoicingDate", From = from, To = now },
-            SortDescending = true
-        };
+            foreach (var inv in task.Result.Invoices)
+                if (seenIssued.Add(inv.KsefNumber))
+                    allIssued.Add(inv);
+        }
 
-        var issuedTask = GetInvoicesAsync(issuedRequest, ct);
-        var receivedTask = GetInvoicesAsync(receivedRequest, ct);
-
-        await Task.WhenAll(issuedTask, receivedTask);
-
-        var issued = issuedTask.Result.Invoices;
-        var received = receivedTask.Result.Invoices;
+        foreach (var task in receivedTasks)
+        {
+            foreach (var inv in task.Result.Invoices)
+                if (seenReceived.Add(inv.KsefNumber))
+                    allReceived.Add(inv);
+        }
 
         var stats = new InvoiceStatsResponse
         {
-            IssuedCount = issued.Count,
-            ReceivedCount = received.Count,
-            IssuedNetTotal = issued.Sum(i => i.NetAmount ?? 0),
-            IssuedGrossTotal = issued.Sum(i => i.GrossAmount ?? 0),
-            ReceivedNetTotal = received.Sum(i => i.NetAmount ?? 0),
-            ReceivedGrossTotal = received.Sum(i => i.GrossAmount ?? 0),
-            PeriodFrom = from,
+            IssuedCount = allIssued.Count,
+            ReceivedCount = allReceived.Count,
+            IssuedNetTotal = allIssued.Sum(i => i.NetAmount ?? 0),
+            IssuedGrossTotal = allIssued.Sum(i => i.GrossAmount ?? 0),
+            ReceivedNetTotal = allReceived.Sum(i => i.NetAmount ?? 0),
+            ReceivedGrossTotal = allReceived.Sum(i => i.GrossAmount ?? 0),
+            PeriodFrom = now.AddMonths(-months),
             PeriodTo = now,
             FetchedAt = DateTime.UtcNow
         };
@@ -252,8 +315,8 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
         foreach (var month in allMonths)
         {
-            var monthIssued = issued.Where(i => GetMonth(i) == month).ToList();
-            var monthReceived = received.Where(i => GetMonth(i) == month).ToList();
+            var monthIssued = allIssued.Where(i => GetMonth(i) == month).ToList();
+            var monthReceived = allReceived.Where(i => GetMonth(i) == month).ToList();
 
             stats.Monthly.Add(new MonthlyStats
             {
@@ -265,7 +328,7 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             });
         }
 
-        var contractorCounts = received
+        var contractorCounts = allReceived
             .Where(i => i.Seller?.Nip != null)
             .GroupBy(i => i.Seller!.Nip!)
             .OrderByDescending(g => g.Count())
@@ -274,8 +337,8 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
         stats.TopContractors = contractorCounts;
 
-        var allInvoices = issued.Concat(received).ToList();
-        var currencyGroups = allInvoices
+        var combined = allIssued.Concat(allReceived).ToList();
+        stats.ByCurrency = combined
             .GroupBy(i => i.Currency ?? "PLN")
             .ToDictionary(
                 g => g.Key,
@@ -286,15 +349,13 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                     GrossTotal = g.Sum(i => i.GrossAmount ?? 0)
                 });
 
-        stats.ByCurrency = currencyGroups;
-
         return stats;
     }
 
     private static string GetMonth(InvoiceMetadata invoice)
     {
-        var date = invoice.PermanentStorageDate
-            ?? invoice.InvoicingDate
+        var date = invoice.InvoicingDate
+            ?? invoice.PermanentStorageDate
             ?? (DateTime.TryParse(invoice.IssueDate, out var parsed) ? parsed : DateTime.MinValue);
         return date.ToString("yyyy-MM");
     }
@@ -319,15 +380,15 @@ public class KSeFInvoiceService : IKSeFInvoiceService
 
             foreach (var endpoint in endpoints)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-                request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
-                response = await client.SendAsync(request, ct);
+                using var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
+                req.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
+                response = await client.SendAsync(req, ct);
                 content = await response.Content.ReadAsStringAsync(ct);
                 if (response.IsSuccessStatusCode) break;
             }
 
             if (response == null || !response.IsSuccessStatusCode)
-                return new InvoiceDetailsResult { Success = false, Error = $"Nie można pobrać faktury z KSeF: {response?.StatusCode}" };
+                return new InvoiceDetailsResult { Success = false, Error = $"Nie można pobrać faktury: {response?.StatusCode}" };
 
             var detailsResponse = JsonSerializer.Deserialize<InvoiceDetailsResponse>(content!, _jsonOptions);
             if (detailsResponse == null)
@@ -444,7 +505,12 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         await _authService.RefreshTokenIfNeededAsync(ct);
 
         if (_session.HasActiveOnlineSession)
-            return new SessionResult { Success = true, SessionReferenceNumber = _session.SessionReferenceNumber, ValidUntil = _session.SessionValidUntil };
+            return new SessionResult
+            {
+                Success = true,
+                SessionReferenceNumber = _session.SessionReferenceNumber,
+                ValidUntil = _session.SessionValidUntil
+            };
 
         try
         {
@@ -473,7 +539,12 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             var sessionResponse = JsonSerializer.Deserialize<OpenSessionResponse>(content, _jsonOptions)!;
             _session.SetOnlineSession(sessionResponse.ReferenceNumber, sessionResponse.ValidUntil, aesKey, iv);
 
-            return new SessionResult { Success = true, SessionReferenceNumber = sessionResponse.ReferenceNumber, ValidUntil = sessionResponse.ValidUntil };
+            return new SessionResult
+            {
+                Success = true,
+                SessionReferenceNumber = sessionResponse.ReferenceNumber,
+                ValidUntil = sessionResponse.ValidUntil
+            };
         }
         catch (Exception ex)
         {
@@ -517,7 +588,8 @@ public class KSeFInvoiceService : IKSeFInvoiceService
                 offlineMode = false
             };
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"sessions/online/{_session.SessionReferenceNumber}/invoices");
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                $"sessions/online/{_session.SessionReferenceNumber}/invoices");
             request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
             request.Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
 
@@ -553,9 +625,13 @@ public class KSeFInvoiceService : IKSeFInvoiceService
             var root = jsonDoc.RootElement;
             if (root.TryGetProperty("exception", out var exception))
             {
-                if (exception.TryGetProperty("exceptionDetailList", out var details) && details.ValueKind == JsonValueKind.Array && details.GetArrayLength() > 0)
-                    if (details[0].TryGetProperty("exceptionDescription", out var desc)) return desc.GetString();
-                if (exception.TryGetProperty("serviceCtx", out var ctx)) return ctx.GetString();
+                if (exception.TryGetProperty("exceptionDetailList", out var details)
+                    && details.ValueKind == JsonValueKind.Array
+                    && details.GetArrayLength() > 0)
+                    if (details[0].TryGetProperty("exceptionDescription", out var desc))
+                        return desc.GetString();
+                if (exception.TryGetProperty("serviceCtx", out var ctx))
+                    return ctx.GetString();
             }
             if (root.TryGetProperty("message", out var message)) return message.GetString();
             if (root.TryGetProperty("error", out var error)) return error.GetString();
@@ -570,7 +646,8 @@ public class KSeFInvoiceService : IKSeFInvoiceService
         try
         {
             var client = CreateClient();
-            using var request = new HttpRequestMessage(HttpMethod.Delete, $"sessions/online/{_session.SessionReferenceNumber}");
+            using var request = new HttpRequestMessage(HttpMethod.Delete,
+                $"sessions/online/{_session.SessionReferenceNumber}");
             request.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
             await client.SendAsync(request, ct);
             _session.ClearOnlineSession();
@@ -594,7 +671,8 @@ public class KSeFInvoiceService : IKSeFInvoiceService
     {
         var response = await client.GetAsync("security/public-key-certificates", ct);
         var content = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"Błąd pobierania certyfikatów: {content}");
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"Błąd pobierania certyfikatów: {content}");
         var certificates = JsonSerializer.Deserialize<List<CertificateInfo>>(content, _jsonOptions)!;
         _session.SetCertificates(certificates);
         return certificates;

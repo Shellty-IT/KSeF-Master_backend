@@ -42,7 +42,7 @@ public class DateRangeFilter
     public string DateType { get; set; } = "PermanentStorage";
 
     [JsonPropertyName("from")]
-    public DateTime From { get; set; } = DateTime.UtcNow.AddDays(-30);
+    public DateTime From { get; set; } = DateTime.UtcNow.AddMonths(-3);
 
     [JsonPropertyName("to")]
     public DateTime To { get; set; } = DateTime.UtcNow;
