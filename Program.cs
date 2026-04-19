@@ -92,7 +92,7 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 var ksefBaseUrl = builder.Configuration.GetValue<string>("KSeF:BaseUrl")
-    ?? "https://api-test.ksef.mf.gov.pl/v2";
+    ?? "https://ksef-test.mf.gov.pl/api/v2";
 var timeoutSeconds = builder.Configuration.GetValue<int>("KSeF:TimeoutSeconds", 60);
 
 builder.Services.AddTransient<KSeFHttpLoggingHandler>();
@@ -121,9 +121,12 @@ builder.Services.AddHttpClient("SmartQuoteWebhook", client =>
 builder.Services.AddSingleton<KSeFSessionManager>();
 builder.Services.AddSingleton<IExternalDraftService, ExternalDraftService>();
 builder.Services.AddSingleton<ITokenEncryptionService, TokenEncryptionService>();
+
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IKSeFCryptoService, KSeFCryptoService>();
 builder.Services.AddScoped<IKSeFAuthService, KSeFAuthService>();
+builder.Services.AddScoped<IXadesSignerService, XadesSignerService>();
+builder.Services.AddScoped<IKSeFCertAuthService, KSeFCertAuthService>();
 builder.Services.AddScoped<IKSeFInvoiceService, KSeFInvoiceService>();
 builder.Services.AddScoped<InvoiceXmlGenerator>();
 builder.Services.AddScoped<IPdfGeneratorService, PdfGeneratorService>();
@@ -182,4 +185,3 @@ app.Logger.LogInformation("Swagger UI: {Url}/swagger", url);
 app.Logger.LogInformation("KSeF API: {KSeFUrl}", ksefBaseUrl);
 
 app.Run(url);
-

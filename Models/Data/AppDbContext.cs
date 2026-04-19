@@ -32,11 +32,18 @@ public class AppDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.UserId).IsUnique();
             entity.HasIndex(e => e.Nip);
+            
             entity.Property(e => e.CompanyName).IsRequired().HasMaxLength(300);
             entity.Property(e => e.Nip).IsRequired().HasMaxLength(10);
-            entity.Property(e => e.KsefTokenEncrypted).IsRequired();
+            entity.Property(e => e.AuthMethod).IsRequired().HasMaxLength(20).HasDefaultValue("token");
             entity.Property(e => e.IsActive).IsRequired();
             entity.Property(e => e.CreatedAt).IsRequired();
+            
+            entity.Property(e => e.KsefTokenEncrypted).HasMaxLength(2000);
+            entity.Property(e => e.CertificateEncrypted).HasMaxLength(10000);
+            entity.Property(e => e.PrivateKeyEncrypted).HasMaxLength(10000);
+            entity.Property(e => e.CertificatePasswordEncrypted).HasMaxLength(500);
+            entity.Property(e => e.LastSuccessfulAuthMethod).HasMaxLength(20);
         });
     }
 }

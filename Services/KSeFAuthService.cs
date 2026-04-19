@@ -132,11 +132,11 @@ public class KSeFAuthService : IKSeFAuthService
             _logger.LogInformation("  ✓ ReferenceNumber: {Ref}", referenceNumber);
             _logger.LogInformation("  ✓ AuthenticationToken otrzymany (len={Len})", authenticationToken.Length);
 
-            _logger.LogInformation("--- Krok 5: Polling GET /auth/{Ref} (czekamy na status 200) ---", referenceNumber);
+            _logger.LogInformation("--- Krok 5: Polling GET /auth/{Ref} ---", referenceNumber);
 
             string? finalToken = null;
-            var maxAttempts = 15;
-            var delayMs = 1000;
+            var maxAttempts = 20;
+            var delayMs = 1500;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -158,12 +158,13 @@ public class KSeFAuthService : IKSeFAuthService
 
                 var status = SafeDeserialize<AuthStatusResponse>(statusContent, "auth/status");
                 var statusCode = status?.Status?.Code ?? -1;
-                _logger.LogInformation("  Status.Code={Code}, Status.Description={Desc}, IsTokenRedeemed={Redeemed}",
-                    statusCode, status?.Status?.Description, status?.IsTokenRedeemed);
+                _logger.LogInformation("  Status.Code={Code}, Status.Description={Desc}",
+                    statusCode, status?.Status?.Description);
 
+                // ✅ Sukces - mamy AccessToken bezpośrednio w odpowiedzi statusu
                 if (status?.AccessToken != null && !string.IsNullOrEmpty(status.AccessToken.Token))
                 {
-                    _logger.LogInformation("  ✓ AccessToken w odpowiedzi statusu — sukces bez token/redeem");
+                    _logger.LogInformation("  ✓ AccessToken w odpowiedzi statusu — sukces!");
                     _session.SetAuthSessionFromStatus(nip, status);
 
                     _logger.LogInformation("  ✅ ZALOGOWANO (via status). AccessToken ważny do: {Until}",
@@ -178,22 +179,29 @@ public class KSeFAuthService : IKSeFAuthService
                     };
                 }
 
+                // ✅ Status 200 (kod KSeF) - gotowy do token/redeem
                 if (statusCode == 200)
                 {
-                    _logger.LogInformation("  ✓ Status 200 — gotowy do token/redeem");
+                    _logger.LogInformation("  ✓ Status code=200 — gotowy do token/redeem");
                     finalToken = authenticationToken;
                     break;
                 }
 
-                if (statusCode == 450)
+                // ✅ Statusy "w toku" - czekaj i próbuj ponownie
+                // 100 = "Uwierzytelnianie w toku" (nowe API v2)
+                // 450 = stary status "w toku"
+                if (statusCode == 100 || statusCode == 450)
                 {
-                    _logger.LogInformation("  Status 450 (w toku) — czekam {Delay}ms...", delayMs);
+                    _logger.LogInformation("  ⏳ Status {Code} ({Desc}) — czekam {Delay}ms...",
+                        statusCode, status?.Status?.Description, delayMs);
                     if (attempt < maxAttempts)
                         await Task.Delay(delayMs, ct);
                     continue;
                 }
 
-                _logger.LogError("  ✗ Nieoczekiwany status: {Code} — {Desc}", statusCode, status?.Status?.Description);
+                // ✅ Nieoczekiwany kod - błąd
+                _logger.LogError("  ✗ Nieoczekiwany status code: {Code} — {Desc}",
+                    statusCode, status?.Status?.Description);
                 return new AuthResult
                 {
                     Success = false,
@@ -203,7 +211,7 @@ public class KSeFAuthService : IKSeFAuthService
 
             if (finalToken == null)
             {
-                _logger.LogError("  ✗ Timeout — status nie osiągnął 200 po {Max} próbach", maxAttempts);
+                _logger.LogError("  ✗ Timeout — status nie osiągnął gotowości po {Max} próbach", maxAttempts);
                 return new AuthResult
                 {
                     Success = false,
@@ -437,7 +445,7 @@ public class KSeFAuthService : IKSeFAuthService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Nie można pobrać timestampMs z JSON — używam timestamp");
+            _logger.LogWarning(ex, "Nie można pobrać timestampMs z JSON");
         }
 
         if (timestampMs == 0)
