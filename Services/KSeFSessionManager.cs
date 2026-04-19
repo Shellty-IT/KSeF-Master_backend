@@ -12,6 +12,7 @@ public class KSeFSessionManager
     private string? _refreshToken;
     private DateTime? _refreshTokenValidUntil;
     private string? _nip;
+    private string? _authMethod;
 
     private string? _sessionReferenceNumber;
     private DateTime? _sessionValidUntil;
@@ -51,6 +52,11 @@ public class KSeFSessionManager
         get { lock (_lock) return _nip; }
     }
 
+    public string? AuthMethod
+    {
+        get { lock (_lock) return _authMethod; }
+    }
+
     public DateTime? AccessTokenValidUntil
     {
         get { lock (_lock) return _accessTokenValidUntil; }
@@ -81,6 +87,7 @@ public class KSeFSessionManager
         lock (_lock)
         {
             _nip = nip;
+            _authMethod = "token";
             _accessToken = tokens.AccessToken?.Token;
             _accessTokenValidUntil = tokens.AccessToken?.ValidUntil;
             _refreshToken = tokens.RefreshToken?.Token;
@@ -93,10 +100,41 @@ public class KSeFSessionManager
         lock (_lock)
         {
             _nip = nip;
+            _authMethod = "token";
             _accessToken = status.AccessToken?.Token;
             _accessTokenValidUntil = status.AccessToken?.ValidUntil;
             _refreshToken = status.RefreshToken?.Token;
             _refreshTokenValidUntil = status.RefreshToken?.ValidUntil;
+        }
+    }
+
+    public void SetAuthSessionDirect(
+        string nip,
+        string accessToken,
+        DateTime? accessTokenValidUntil,
+        DateTime? refreshTokenValidUntil)
+    {
+        lock (_lock)
+        {
+            _nip = nip;
+            _authMethod = "token";
+            _accessToken = accessToken;
+            _accessTokenValidUntil = accessTokenValidUntil ?? DateTime.UtcNow.AddMinutes(15);
+            _refreshToken = null;
+            _refreshTokenValidUntil = refreshTokenValidUntil;
+        }
+    }
+
+    public void SetCertificateSession(string nip, string sessionToken, DateTime expiresAt)
+    {
+        lock (_lock)
+        {
+            _nip = nip;
+            _authMethod = "certificate";
+            _accessToken = sessionToken;
+            _accessTokenValidUntil = expiresAt;
+            _refreshToken = null;
+            _refreshTokenValidUntil = null;
         }
     }
 
@@ -118,6 +156,7 @@ public class KSeFSessionManager
             _refreshToken = null;
             _refreshTokenValidUntil = null;
             _nip = null;
+            _authMethod = null;
             ClearOnlineSessionInternal();
         }
     }
@@ -227,6 +266,7 @@ public class KSeFSessionManager
             {
                 isAuthenticated = IsAuthenticated,
                 nip = _nip,
+                authMethod = _authMethod,
                 accessTokenValidUntil = _accessTokenValidUntil,
                 refreshTokenValidUntil = _refreshTokenValidUntil,
                 hasActiveOnlineSession = HasActiveOnlineSession,
