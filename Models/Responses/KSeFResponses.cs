@@ -338,6 +338,7 @@ public class AuthResult
 {
     public bool Success { get; set; }
     public string? Error { get; set; }
+    public string? SessionToken { get; set; }           
     public string? ReferenceNumber { get; set; }
     public DateTime? AccessTokenValidUntil { get; set; }
     public DateTime? RefreshTokenValidUntil { get; set; }

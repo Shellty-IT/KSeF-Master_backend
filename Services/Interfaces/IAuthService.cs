@@ -1,5 +1,6 @@
 ﻿// Services/Interfaces/IAuthService.cs
 using KSeF.Backend.Models.Requests;
+using KSeF.Backend.Models.Responses;
 
 namespace KSeF.Backend.Services.Interfaces;
 
@@ -26,6 +27,8 @@ public class CompanyInfo
     public string Nip { get; set; } = string.Empty;
     public bool IsActive { get; set; }
     public bool HasKsefToken { get; set; }
+    public string AuthMethod { get; set; } = "token";
+    public bool HasCertificate { get; set; }
 }
 
 public interface IAuthService
@@ -36,4 +39,10 @@ public interface IAuthService
     Task<AppAuthResult> SetupCompanyAsync(int userId, CompanySetupRequest request);
     Task<AppAuthResult> UpdateKsefTokenAsync(int userId, UpdateKsefTokenRequest request);
     Task<string?> GetDecryptedKsefTokenAsync(int userId);
+
+    Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertificateRequest request);
+    Task<AppAuthResult> SwitchAuthMethodAsync(int userId, SwitchAuthMethodRequest request);
+    Task<AppAuthResult> DeleteCertificateAsync(int userId);
+    Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCertificateAsync(int userId);
+    Task<UserCertificateInfo?> GetCertificateInfoAsync(int userId);
 }
