@@ -1,0 +1,14 @@
+.idea
+/node_modules
+obj/
+bin/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+ksef_master_dev.db
+ksef_master.db
+
+# Entity Framework Migrations (opcjonalnie)
+Migrations/cleare
