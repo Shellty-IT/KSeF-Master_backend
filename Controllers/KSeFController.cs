@@ -1,5 +1,4 @@
 ﻿// Controllers/KSeFController.cs
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using KSeF.Backend.Models.Requests;
@@ -37,7 +36,6 @@ public class KSeFController : ControllerBase
         {
             server = "OK",
             timestamp = DateTime.UtcNow,
-            environment = "KSeF Test (ksef-test.mf.gov.pl)",
             version = "2.0.0",
             session = _session.GetSessionInfo()
         });
@@ -47,8 +45,7 @@ public class KSeFController : ControllerBase
     [Authorize]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
-        _logger.LogInformation("=== LOGIN REQUEST ===");
-        _logger.LogInformation("NIP: {Nip}", request.Nip);
+        _logger.LogInformation("KSeF login request for NIP: {Nip}", request.Nip);
 
         if (string.IsNullOrWhiteSpace(request.Nip))
             return BadRequest(new { success = false, error = "NIP jest wymagany" });
@@ -59,7 +56,7 @@ public class KSeFController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.KsefToken))
             return BadRequest(new { success = false, error = "Token KSeF jest wymagany" });
 
-        if (!request.KsefToken.Contains("|"))
+        if (!request.KsefToken.Contains('|'))
             return BadRequest(new { success = false, error = "Nieprawidłowy format tokenu KSeF" });
 
         try
@@ -68,11 +65,9 @@ public class KSeFController : ControllerBase
 
             if (!result.Success)
             {
-                _logger.LogWarning("Login failed: {Error}", result.Error);
+                _logger.LogWarning("KSeF login failed: {Error}", result.Error);
                 return BadRequest(new { success = false, error = result.Error });
             }
-
-            _logger.LogInformation("Login successful for NIP: {Nip}", request.Nip);
 
             return Ok(new
             {
@@ -89,12 +84,8 @@ public class KSeFController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unexpected error during login");
-            return StatusCode(500, new
-            {
-                success = false,
-                error = "Wystąpił nieoczekiwany błąd podczas logowania"
-            });
+            _logger.LogError(ex, "Unexpected error during KSeF login");
+            return StatusCode(500, new { success = false, error = "Wystąpił nieoczekiwany błąd" });
         }
     }
 
@@ -104,7 +95,7 @@ public class KSeFController : ControllerBase
     {
         var nip = _session.Nip;
         _authService.Logout();
-        _logger.LogInformation("Logged out NIP: {Nip}", nip ?? "none");
+        _logger.LogInformation("KSeF logout for NIP: {Nip}", nip ?? "none");
         return Ok(new { success = true, message = "Wylogowano pomyślnie" });
     }
 
@@ -112,48 +103,38 @@ public class KSeFController : ControllerBase
     [Authorize]
     public async Task<IActionResult> GetInvoices([FromBody] InvoiceQueryRequest request, CancellationToken ct)
     {
-        _logger.LogInformation("=== GET INVOICES REQUEST ===");
-        _logger.LogInformation("SubjectType: {Type}, DateType: {DateType}, From: {From}, To: {To}",
-            request.SubjectType, request.DateRange?.DateType, request.DateRange?.From, request.DateRange?.To);
+        _logger.LogInformation("GetInvoices: SubjectType={Type}, DateType={DateType}",
+            request.SubjectType, request.DateRange?.DateType);
 
         var validationErrors = ValidateInvoiceQuery(request);
         if (validationErrors.Count > 0)
-            return BadRequest(new
-            {
-                success = false,
-                error = "Błędy walidacji zapytania",
-                details = validationErrors
-            });
+            return BadRequest(new { success = false, error = "Błędy walidacji zapytania", details = validationErrors });
 
         try
         {
             var result = await _invoiceService.GetInvoicesAsync(request, ct);
 
-            _logger.LogInformation(
-                "Zwrócono {Count} faktur (SubjectType: {Type}, DateType: {DateType})",
-                result.TotalCount, request.SubjectType, request.DateRange.DateType);
+            _logger.LogInformation("GetInvoices: zwrócono {Count} faktur", result.TotalCount);
 
             return Ok(new { success = true, data = result });
         }
         catch (UnauthorizedAccessException ex)
         {
-            _logger.LogWarning("Unauthorized: {Message}", ex.Message);
+            _logger.LogWarning("GetInvoices unauthorized: {Message}", ex.Message);
             return Unauthorized(new { success = false, error = ex.Message });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting invoices");
+            _logger.LogError(ex, "GetInvoices error");
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
 
     [HttpGet("invoices/stats")]
     [Authorize]
-    public async Task<IActionResult> GetInvoiceStats(
-        [FromQuery] int months = 3,
-        CancellationToken ct = default)
+    public async Task<IActionResult> GetInvoiceStats([FromQuery] int months = 3, CancellationToken ct = default)
     {
-        _logger.LogInformation("=== GET INVOICE STATS (months={Months}) ===", months);
+        _logger.LogInformation("GetInvoiceStats: months={Months}", months);
 
         if (months < 1) months = 1;
         if (months > 12) months = 12;
@@ -165,12 +146,11 @@ public class KSeFController : ControllerBase
         }
         catch (UnauthorizedAccessException ex)
         {
-            _logger.LogWarning("Unauthorized: {Message}", ex.Message);
             return Unauthorized(new { success = false, error = ex.Message });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting invoice stats");
+            _logger.LogError(ex, "GetInvoiceStats error");
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
@@ -179,8 +159,6 @@ public class KSeFController : ControllerBase
     [Authorize]
     public async Task<IActionResult> OpenSession(CancellationToken ct)
     {
-        _logger.LogInformation("=== OPEN SESSION REQUEST ===");
-
         try
         {
             var result = await _invoiceService.OpenOnlineSessionAsync(ct);
@@ -205,7 +183,7 @@ public class KSeFController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error opening session");
+            _logger.LogError(ex, "OpenSession error");
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
@@ -222,17 +200,11 @@ public class KSeFController : ControllerBase
     [Authorize]
     public async Task<IActionResult> SendInvoice([FromBody] CreateInvoiceRequest request, CancellationToken ct)
     {
-        _logger.LogInformation("=== SEND INVOICE REQUEST ===");
-        _logger.LogInformation("Invoice number: {Number}", request.InvoiceNumber);
+        _logger.LogInformation("SendInvoice: {Number}", request.InvoiceNumber);
 
         var validationErrors = ValidateInvoiceRequest(request);
         if (validationErrors.Count > 0)
-            return BadRequest(new
-            {
-                success = false,
-                error = "Błędy walidacji",
-                details = validationErrors
-            });
+            return BadRequest(new { success = false, error = "Błędy walidacji", details = validationErrors });
 
         try
         {
@@ -260,7 +232,7 @@ public class KSeFController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending invoice");
+            _logger.LogError(ex, "SendInvoice error");
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
@@ -271,18 +243,12 @@ public class KSeFController : ControllerBase
         [FromBody] GeneratePdfRequest request,
         [FromServices] IPdfGeneratorService pdfService)
     {
-        _logger.LogInformation("=== GENERATE PDF REQUEST ===");
-        _logger.LogInformation("InvoiceNumber: {Number}, Hash: {Hash}",
-            request.InvoiceNumber, request.InvoiceHash);
+        _logger.LogInformation("GeneratePdf: {Number}", request.InvoiceNumber);
 
         try
         {
             if (string.IsNullOrEmpty(request.InvoiceHash))
-                return BadRequest(new
-                {
-                    success = false,
-                    error = "Hash faktury jest wymagany do wygenerowania linku weryfikacyjnego"
-                });
+                return BadRequest(new { success = false, error = "Hash faktury jest wymagany" });
 
             var pdfBytes = pdfService.GeneratePdf(request);
             var fileName = SanitizeFileName(request.InvoiceNumber ?? "faktura") + ".pdf";
@@ -290,7 +256,7 @@ public class KSeFController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Błąd generowania PDF");
+            _logger.LogError(ex, "GeneratePdf error");
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
@@ -299,7 +265,7 @@ public class KSeFController : ControllerBase
     [Authorize]
     public async Task<IActionResult> GetInvoiceDetails(string ksefNumber, CancellationToken ct)
     {
-        _logger.LogInformation("=== GET INVOICE DETAILS: {KsefNumber} ===", ksefNumber);
+        _logger.LogInformation("GetInvoiceDetails: {KsefNumber}", ksefNumber);
 
         if (string.IsNullOrWhiteSpace(ksefNumber))
             return BadRequest(new { success = false, error = "Numer KSeF jest wymagany" });
@@ -319,56 +285,54 @@ public class KSeFController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Błąd pobierania szczegółów faktury");
+            _logger.LogError(ex, "GetInvoiceDetails error");
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
 
-    private string SanitizeFileName(string name)
+    private static string SanitizeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
         return string.Join("-", name.Split(invalid, StringSplitOptions.RemoveEmptyEntries));
     }
 
-    private List<string> ValidateInvoiceQuery(InvoiceQueryRequest request)
+    private static List<string> ValidateInvoiceQuery(InvoiceQueryRequest request)
     {
         var errors = new List<string>();
 
         if (string.IsNullOrWhiteSpace(request.SubjectType))
             errors.Add("SubjectType jest wymagany (Subject1 lub Subject2)");
-
-        if (request.SubjectType != "Subject1" && request.SubjectType != "Subject2")
+        else if (request.SubjectType != "Subject1" && request.SubjectType != "Subject2")
             errors.Add("SubjectType musi być 'Subject1' (wystawione) lub 'Subject2' (odebrane)");
 
         if (request.DateRange == null)
         {
             errors.Add("DateRange jest wymagany");
+            return errors;
         }
+
+        if (request.DateRange.From == default)
+            errors.Add("DateRange.From jest wymagany");
+
+        if (request.DateRange.To == default)
+            errors.Add("DateRange.To jest wymagany");
+
+        if (request.DateRange.From > request.DateRange.To)
+            errors.Add("DateRange.From nie może być późniejszy niż DateRange.To");
+
+        if (request.DateRange.To - request.DateRange.From > TimeSpan.FromDays(366))
+            errors.Add("Zakres dat nie może przekraczać 12 miesięcy");
+
+        if (string.IsNullOrWhiteSpace(request.DateRange.DateType))
+            errors.Add("DateRange.DateType jest wymagany");
         else
         {
-            if (request.DateRange.From == default)
-                errors.Add("DateRange.From jest wymagany");
-
-            if (request.DateRange.To == default)
-                errors.Add("DateRange.To jest wymagany");
-
-            if (request.DateRange.From > request.DateRange.To)
-                errors.Add("DateRange.From nie może być późniejszy niż DateRange.To");
-
-            var maxRange = TimeSpan.FromDays(366);
-            if (request.DateRange.To - request.DateRange.From > maxRange)
-                errors.Add("Zakres dat nie może przekraczać 12 miesięcy");
-
-            if (string.IsNullOrWhiteSpace(request.DateRange.DateType))
-                errors.Add("DateRange.DateType jest wymagany");
-
             var validDateTypes = new[] { "InvoicingDate", "PermanentStorage", "AcquisitionTimestamp" };
             if (!validDateTypes.Contains(request.DateRange.DateType))
                 errors.Add($"DateRange.DateType musi być jednym z: {string.Join(", ", validDateTypes)}");
         }
 
-        if (request.AmountFrom.HasValue && request.AmountTo.HasValue
-            && request.AmountFrom > request.AmountTo)
+        if (request.AmountFrom.HasValue && request.AmountTo.HasValue && request.AmountFrom > request.AmountTo)
             errors.Add("AmountFrom nie może być większy niż AmountTo");
 
         if (request.MaxResults.HasValue && request.MaxResults.Value < 1)
@@ -377,7 +341,7 @@ public class KSeFController : ControllerBase
         return errors;
     }
 
-    private List<string> ValidateInvoiceRequest(CreateInvoiceRequest request)
+    private static List<string> ValidateInvoiceRequest(CreateInvoiceRequest request)
     {
         var errors = new List<string>();
 

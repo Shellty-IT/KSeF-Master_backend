@@ -1,30 +1,34 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+﻿// Services/AuthService.cs
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using KSeF.Backend.Models.Data;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Models.Responses;
+using KSeF.Backend.Repositories;
 using KSeF.Backend.Services.Interfaces;
 
 namespace KSeF.Backend.Services;
 
 public class AuthService : IAuthService
 {
-    private readonly AppDbContext _db;
+    private readonly IUserRepository _userRepository;
+    private readonly ICompanyRepository _companyRepository;
     private readonly ITokenEncryptionService _encryption;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
-        AppDbContext db,
+        IUserRepository userRepository,
+        ICompanyRepository companyRepository,
         ITokenEncryptionService encryption,
         IConfiguration configuration,
         ILogger<AuthService> logger)
     {
-        _db = db;
+        _userRepository = userRepository;
+        _companyRepository = companyRepository;
         _encryption = encryption;
         _configuration = configuration;
         _logger = logger;
@@ -34,13 +38,12 @@ public class AuthService : IAuthService
     {
         var errors = ValidateRegister(request);
         if (errors.Count > 0)
-            return new AppAuthResult { Success = false, Error = string.Join("; ", errors) };
+            return Fail(string.Join("; ", errors));
 
         var emailLower = request.Email.Trim().ToLowerInvariant();
 
-        var exists = await _db.Users.AnyAsync(u => u.Email == emailLower);
-        if (exists)
-            return new AppAuthResult { Success = false, Error = "Konto z tym adresem email już istnieje" };
+        if (await _userRepository.EmailExistsAsync(emailLower))
+            return Fail("Konto z tym adresem email już istnieje");
 
         var user = new User
         {
@@ -50,191 +53,159 @@ public class AuthService : IAuthService
             CreatedAt = DateTime.UtcNow
         };
 
-        _db.Users.Add(user);
-        await _db.SaveChangesAsync();
+        await _userRepository.CreateAsync(user);
 
         _logger.LogInformation("User registered: {Email}", emailLower);
 
-        var token = GenerateJwt(user);
-        var userInfo = MapUserInfo(user);
-
-        return new AppAuthResult { Success = true, Token = token, User = userInfo };
+        return new AppAuthResult
+        {
+            Success = true,
+            Token = GenerateJwt(user),
+            User = MapUserInfo(user)
+        };
     }
 
     public async Task<AppAuthResult> LoginAsync(LoginAppRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
-            return new AppAuthResult { Success = false, Error = "Email i hasło są wymagane" };
+            return Fail("Email i hasło są wymagane");
 
-        var emailLower = request.Email.Trim().ToLowerInvariant();
+        var user = await _userRepository.GetByEmailAsync(request.Email);
 
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Email == emailLower);
+        if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+            return Fail("Nieprawidłowy email lub hasło");
 
-        if (user == null)
-            return new AppAuthResult { Success = false, Error = "Nieprawidłowy email lub hasło" };
+        _logger.LogInformation("User logged in: {Email}", user.Email);
 
-        if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
-            return new AppAuthResult { Success = false, Error = "Nieprawidłowy email lub hasło" };
-
-        _logger.LogInformation("User logged in: {Email}", emailLower);
-
-        var token = GenerateJwt(user);
-        var userInfo = MapUserInfo(user);
-
-        return new AppAuthResult { Success = true, Token = token, User = userInfo };
+        return new AppAuthResult
+        {
+            Success = true,
+            Token = GenerateJwt(user),
+            User = MapUserInfo(user)
+        };
     }
 
     public async Task<UserInfo?> GetUserByIdAsync(int userId)
     {
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
-
-        if (user == null) return null;
-
-        return MapUserInfo(user);
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+        return user == null ? null : MapUserInfo(user);
     }
 
     public async Task<AppAuthResult> SetupCompanyAsync(int userId, CompanySetupRequest request)
     {
         var errors = ValidateCompanySetup(request);
         if (errors.Count > 0)
-            return new AppAuthResult { Success = false, Error = string.Join("; ", errors) };
+            return Fail(string.Join("; ", errors));
 
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
-
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
         if (user == null)
-            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+            return Fail("Użytkownik nie istnieje");
 
         if (user.CompanyProfile != null)
-            return new AppAuthResult { Success = false, Error = "Firma jest już skonfigurowana. Użyj aktualizacji tokenu." };
-
-        var encryptedToken = _encryption.Encrypt(request.KsefToken.Trim());
+            return Fail("Firma jest już skonfigurowana. Użyj aktualizacji tokenu.");
 
         var company = new CompanyProfile
         {
             UserId = userId,
             CompanyName = request.CompanyName.Trim(),
             Nip = request.Nip.Trim(),
-            KsefTokenEncrypted = encryptedToken,
+            KsefTokenEncrypted = _encryption.Encrypt(request.KsefToken.Trim()),
             AuthMethod = "token",
             KsefEnvironment = request.KsefEnvironment,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
 
-        _db.CompanyProfiles.Add(company);
-        await _db.SaveChangesAsync();
+        await _companyRepository.CreateAsync(company);
 
-        _logger.LogInformation("Company configured for user {UserId}: NIP {Nip}, Environment {Env}", 
+        _logger.LogInformation("Company configured for user {UserId}: NIP {Nip}, Environment {Env}",
             userId, request.Nip, request.KsefEnvironment);
 
-        var token = GenerateJwt(user);
         user.CompanyProfile = company;
-        var userInfo = MapUserInfo(user);
 
-        return new AppAuthResult { Success = true, Token = token, User = userInfo };
+        return new AppAuthResult
+        {
+            Success = true,
+            Token = GenerateJwt(user),
+            User = MapUserInfo(user)
+        };
     }
 
     public async Task<AppAuthResult> UpdateKsefTokenAsync(int userId, UpdateKsefTokenRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.KsefToken))
-            return new AppAuthResult { Success = false, Error = "Token KSeF jest wymagany" };
+            return Fail("Token KSeF jest wymagany");
 
         if (!request.KsefToken.Contains('|'))
-            return new AppAuthResult { Success = false, Error = "Nieprawidłowy format tokenu KSeF" };
+            return Fail("Nieprawidłowy format tokenu KSeF");
 
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null)
+            return Fail("Najpierw skonfiguruj firmę");
 
-        if (user == null)
-            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+        company.KsefTokenEncrypted = _encryption.Encrypt(request.KsefToken.Trim());
+        company.UpdatedAt = DateTime.UtcNow;
 
-        if (user.CompanyProfile == null)
-            return new AppAuthResult { Success = false, Error = "Najpierw skonfiguruj firmę" };
-
-        user.CompanyProfile.KsefTokenEncrypted = _encryption.Encrypt(request.KsefToken.Trim());
-        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
+        await _companyRepository.UpdateAsync(company);
 
         _logger.LogInformation("KSeF token updated for user {UserId}", userId);
 
-        var userInfo = MapUserInfo(user);
-
-        return new AppAuthResult { Success = true, User = userInfo };
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+        return new AppAuthResult { Success = true, User = MapUserInfo(user!) };
     }
 
     public async Task<AppAuthResult> UpdateCompanyProfileAsync(int userId, UpdateCompanyProfileRequest request)
     {
         var errors = ValidateCompanyProfile(request);
         if (errors.Count > 0)
-            return new AppAuthResult { Success = false, Error = string.Join("; ", errors) };
+            return Fail(string.Join("; ", errors));
 
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null)
+            return Fail("Profil firmy nie istnieje. Najpierw skonfiguruj firmę.");
 
-        if (user == null)
-            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+        company.CompanyName = request.CompanyName.Trim();
+        company.Nip = request.Nip.Trim();
+        company.UpdatedAt = DateTime.UtcNow;
 
-        if (user.CompanyProfile == null)
-            return new AppAuthResult { Success = false, Error = "Profil firmy nie istnieje. Najpierw skonfiguruj firmę." };
+        await _companyRepository.UpdateAsync(company);
 
-        user.CompanyProfile.CompanyName = request.CompanyName.Trim();
-        user.CompanyProfile.Nip = request.Nip.Trim();
-        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-
-        _logger.LogInformation("Company profile updated for user {UserId}: {CompanyName}, NIP {Nip}", 
+        _logger.LogInformation("Company profile updated for user {UserId}: {CompanyName}, NIP {Nip}",
             userId, request.CompanyName, request.Nip);
 
-        var userInfo = MapUserInfo(user);
-        return new AppAuthResult { Success = true, User = userInfo };
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+        return new AppAuthResult { Success = true, User = MapUserInfo(user!) };
     }
 
     public async Task<AppAuthResult> UpdateKsefEnvironmentAsync(int userId, UpdateKsefEnvironmentRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.KsefEnvironment))
-            return new AppAuthResult { Success = false, Error = "Środowisko KSeF jest wymagane" };
+            return Fail("Środowisko KSeF jest wymagane");
 
         if (request.KsefEnvironment != "Test" && request.KsefEnvironment != "Production")
-            return new AppAuthResult { Success = false, Error = "Dozwolone środowiska: 'Test' lub 'Production'" };
+            return Fail("Dozwolone środowiska: 'Test' lub 'Production'");
 
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null)
+            return Fail("Najpierw skonfiguruj firmę");
 
-        if (user == null)
-            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+        company.KsefEnvironment = request.KsefEnvironment;
+        company.UpdatedAt = DateTime.UtcNow;
 
-        if (user.CompanyProfile == null)
-            return new AppAuthResult { Success = false, Error = "Najpierw skonfiguruj firmę" };
+        await _companyRepository.UpdateAsync(company);
 
-        user.CompanyProfile.KsefEnvironment = request.KsefEnvironment;
-        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-
-        _logger.LogInformation("⚙️ KSeF environment switched to {Environment} for user {UserId}", 
+        _logger.LogInformation("KSeF environment switched to {Environment} for user {UserId}",
             request.KsefEnvironment, userId);
 
-        var userInfo = MapUserInfo(user);
-        return new AppAuthResult { Success = true, User = userInfo };
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+        return new AppAuthResult { Success = true, User = MapUserInfo(user!) };
     }
-    
+
     public async Task<string?> GetDecryptedKsefTokenAsync(int userId)
     {
-        var company = await _db.CompanyProfiles
-            .FirstOrDefaultAsync(c => c.UserId == userId && c.IsActive);
-
-        if (company == null || string.IsNullOrEmpty(company.KsefTokenEncrypted)) return null;
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null || string.IsNullOrEmpty(company.KsefTokenEncrypted))
+            return null;
 
         try
         {
@@ -247,272 +218,179 @@ public class AuthService : IAuthService
         }
     }
 
-public async Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertificateRequest request)
-{
-    var user = await _db.Users
-        .Include(u => u.CompanyProfile)
-        .FirstOrDefaultAsync(u => u.Id == userId);
-
-    if (user == null)
-        return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
-
-    if (user.CompanyProfile == null)
-        return new AppAuthResult { Success = false, Error = "Najpierw skonfiguruj firmę" };
-
-    try
+    public async Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertificateRequest request)
     {
-        _logger.LogInformation("Uploading certificate for user {UserId}", userId);
-        _logger.LogDebug("  Cert Base64 length: {Len}", request.CertificateBase64?.Length ?? 0);
-        _logger.LogDebug("  Key Base64 length: {Len}", request.PrivateKeyBase64?.Length ?? 0);
-        _logger.LogDebug("  Password provided: {HasPwd}", !string.IsNullOrEmpty(request.Password));
-
-        if (string.IsNullOrWhiteSpace(request.CertificateBase64))
-            return new AppAuthResult { Success = false, Error = "Certyfikat jest wymagany" };
-
-        if (string.IsNullOrWhiteSpace(request.PrivateKeyBase64))
-            return new AppAuthResult { Success = false, Error = "Klucz prywatny jest wymagany" };
-
-        byte[] certBytes;
-        byte[] keyBytes;
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null)
+            return Fail("Najpierw skonfiguruj firmę");
 
         try
         {
-            certBytes = Convert.FromBase64String(request.CertificateBase64);
-            keyBytes = Convert.FromBase64String(request.PrivateKeyBase64);
-        }
-        catch (FormatException)
-        {
-            return new AppAuthResult { Success = false, Error = "Nieprawidłowy format Base64 certyfikatu lub klucza" };
-        }
+            _logger.LogInformation("Uploading certificate for user {UserId}", userId);
 
-        _logger.LogDebug("  Cert bytes length: {Len}", certBytes.Length);
-        _logger.LogDebug("  Key bytes length: {Len}", keyBytes.Length);
+            if (string.IsNullOrWhiteSpace(request.CertificateBase64))
+                return Fail("Certyfikat jest wymagany");
 
-        var certText = Encoding.UTF8.GetString(certBytes);
-        var keyText = Encoding.UTF8.GetString(keyBytes);
+            if (string.IsNullOrWhiteSpace(request.PrivateKeyBase64))
+                return Fail("Klucz prywatny jest wymagany");
 
-        if (!certText.Contains("BEGIN CERTIFICATE"))
-        {
-            return new AppAuthResult { Success = false, Error = "Certyfikat nie jest w formacie PEM (brak BEGIN CERTIFICATE)" };
-        }
+            byte[] certBytes;
+            byte[] keyBytes;
 
-        if (!keyText.Contains("PRIVATE KEY"))
-        {
-            return new AppAuthResult { Success = false, Error = "Klucz prywatny nie jest w formacie PEM (brak PRIVATE KEY)" };
-        }
+            try
+            {
+                certBytes = Convert.FromBase64String(request.CertificateBase64);
+                keyBytes = Convert.FromBase64String(request.PrivateKeyBase64);
+            }
+            catch (FormatException)
+            {
+                return Fail("Nieprawidłowy format Base64 certyfikatu lub klucza");
+            }
 
-        _logger.LogDebug("  ✓ PEM format detected");
+            var certText = Encoding.UTF8.GetString(certBytes);
+            var keyText = Encoding.UTF8.GetString(keyBytes);
 
-        X509Certificate2 publicCert;
-        try
-        {
-            publicCert = X509Certificate2.CreateFromPem(certText);
-            _logger.LogInformation("  ✓ Certificate parsed: {Subject}", publicCert.Subject);
-            _logger.LogInformation("  Valid: {From} → {To}", publicCert.NotBefore, publicCert.NotAfter);
+            if (!certText.Contains("BEGIN CERTIFICATE"))
+                return Fail("Certyfikat nie jest w formacie PEM (brak BEGIN CERTIFICATE)");
+
+            if (!keyText.Contains("PRIVATE KEY"))
+                return Fail("Klucz prywatny nie jest w formacie PEM (brak PRIVATE KEY)");
+
+            try
+            {
+                var publicCert = X509Certificate2.CreateFromPem(certText);
+                _logger.LogInformation("Certificate parsed: {Subject}", publicCert.Subject);
+            }
+            catch (Exception ex)
+            {
+                return Fail($"Nieprawidłowy certyfikat: {ex.Message}");
+            }
+
+            company.CertificateEncrypted = _encryption.Encrypt(request.CertificateBase64.Trim());
+            company.PrivateKeyEncrypted = _encryption.Encrypt(request.PrivateKeyBase64.Trim());
+            company.CertificatePasswordEncrypted = !string.IsNullOrEmpty(request.Password)
+                ? _encryption.Encrypt(request.Password.Trim())
+                : null;
+            company.UpdatedAt = DateTime.UtcNow;
+
+            await _companyRepository.UpdateAsync(company);
+
+            _logger.LogInformation("Certificate uploaded for user {UserId}", userId);
+
+            var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+            return new AppAuthResult { Success = true, User = MapUserInfo(user!) };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to parse certificate");
-            return new AppAuthResult { Success = false, Error = $"Nieprawidłowy certyfikat: {ex.Message}" };
+            _logger.LogError(ex, "Failed to upload certificate for user {UserId}", userId);
+            return Fail($"Błąd zapisu certyfikatu: {ex.Message}");
         }
-
-        user.CompanyProfile.CertificateEncrypted = _encryption.Encrypt(request.CertificateBase64.Trim());
-        user.CompanyProfile.PrivateKeyEncrypted = _encryption.Encrypt(request.PrivateKeyBase64.Trim());
-
-        if (!string.IsNullOrEmpty(request.Password))
-        {
-            var passwordTrimmed = request.Password.Trim();
-            _logger.LogDebug("  Password length (trimmed): {Len}", passwordTrimmed.Length);
-            user.CompanyProfile.CertificatePasswordEncrypted = _encryption.Encrypt(passwordTrimmed);
-        }
-        else
-        {
-            _logger.LogWarning("  No password provided for private key");
-            user.CompanyProfile.CertificatePasswordEncrypted = null;
-        }
-
-        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-
-        _logger.LogInformation("✅ Certificate uploaded successfully for user {UserId}", userId);
-
-        var userInfo = MapUserInfo(user);
-        return new AppAuthResult { Success = true, User = userInfo };
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Failed to upload certificate for user {UserId}", userId);
-        return new AppAuthResult { Success = false, Error = $"Błąd zapisu certyfikatu: {ex.Message}" };
-    }
-}
 
     public async Task<AppAuthResult> SwitchAuthMethodAsync(int userId, SwitchAuthMethodRequest request)
     {
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
-
-        if (user == null)
-            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
-
-        if (user.CompanyProfile == null)
-            return new AppAuthResult { Success = false, Error = "Najpierw skonfiguruj firmę" };
-
         if (request.AuthMethod != "token" && request.AuthMethod != "certificate")
-            return new AppAuthResult { Success = false, Error = "Dozwolone metody: 'token' lub 'certificate'" };
+            return Fail("Dozwolone metody: 'token' lub 'certificate'");
 
-        if (request.AuthMethod == "certificate")
-        {
-            if (string.IsNullOrEmpty(user.CompanyProfile.CertificateEncrypted))
-                return new AppAuthResult { Success = false, Error = "Najpierw prześlij certyfikat" };
-        }
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null)
+            return Fail("Najpierw skonfiguruj firmę");
 
-        if (request.AuthMethod == "token")
-        {
-            if (string.IsNullOrEmpty(user.CompanyProfile.KsefTokenEncrypted))
-                return new AppAuthResult { Success = false, Error = "Token KSeF nie jest skonfigurowany" };
-        }
+        if (request.AuthMethod == "certificate" && string.IsNullOrEmpty(company.CertificateEncrypted))
+            return Fail("Najpierw prześlij certyfikat");
 
-        user.CompanyProfile.AuthMethod = request.AuthMethod;
-        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
+        if (request.AuthMethod == "token" && string.IsNullOrEmpty(company.KsefTokenEncrypted))
+            return Fail("Token KSeF nie jest skonfigurowany");
 
-        await _db.SaveChangesAsync();
+        company.AuthMethod = request.AuthMethod;
+        company.UpdatedAt = DateTime.UtcNow;
 
-        _logger.LogInformation("Auth method switched to {Method} for user {UserId}", request.AuthMethod, userId);
+        await _companyRepository.UpdateAsync(company);
 
-        var userInfo = MapUserInfo(user);
-        return new AppAuthResult { Success = true, User = userInfo };
+        _logger.LogInformation("Auth method switched to {Method} for user {UserId}",
+            request.AuthMethod, userId);
+
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+        return new AppAuthResult { Success = true, User = MapUserInfo(user!) };
     }
 
     public async Task<AppAuthResult> DeleteCertificateAsync(int userId)
     {
-        var user = await _db.Users
-            .Include(u => u.CompanyProfile)
-            .FirstOrDefaultAsync(u => u.Id == userId);
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null)
+            return Fail("Profil firmy nie istnieje");
 
-        if (user == null)
-            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+        company.CertificateEncrypted = null;
+        company.PrivateKeyEncrypted = null;
+        company.CertificatePasswordEncrypted = null;
+        company.AuthMethod = "token";
+        company.UpdatedAt = DateTime.UtcNow;
 
-        if (user.CompanyProfile == null)
-            return new AppAuthResult { Success = false, Error = "Profil firmy nie istnieje" };
-
-        user.CompanyProfile.CertificateEncrypted = null;
-        user.CompanyProfile.PrivateKeyEncrypted = null;
-        user.CompanyProfile.CertificatePasswordEncrypted = null;
-        user.CompanyProfile.AuthMethod = "token";
-        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
+        await _companyRepository.UpdateAsync(company);
 
         _logger.LogInformation("Certificate deleted for user {UserId}", userId);
 
-        var userInfo = MapUserInfo(user);
-        return new AppAuthResult { Success = true, User = userInfo };
+        var user = await _userRepository.GetByIdWithCompanyAsync(userId);
+        return new AppAuthResult { Success = true, User = MapUserInfo(user!) };
     }
 
-public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCertificateAsync(int userId)
-{
-    var company = await _db.CompanyProfiles
-        .FirstOrDefaultAsync(c => c.UserId == userId && c.IsActive);
-
-    if (company == null) return null;
-
-    if (string.IsNullOrEmpty(company.CertificateEncrypted) || string.IsNullOrEmpty(company.PrivateKeyEncrypted))
-        return null;
-
-    try
+    public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCertificateAsync(int userId)
     {
-        _logger.LogInformation("🔐 Decrypting certificate for user {UserId}", userId);
+        var company = await _companyRepository.GetByUserIdAsync(userId);
+        if (company == null) return null;
 
-        var certBase64 = _encryption.Decrypt(company.CertificateEncrypted);
-        var keyBase64 = _encryption.Decrypt(company.PrivateKeyEncrypted);
+        if (string.IsNullOrEmpty(company.CertificateEncrypted) ||
+            string.IsNullOrEmpty(company.PrivateKeyEncrypted))
+            return null;
 
-        _logger.LogDebug("  📄 Decrypted cert Base64 length: {Len}", certBase64?.Length ?? 0);
-        _logger.LogDebug("  🔑 Decrypted key Base64 length: {Len}", keyBase64?.Length ?? 0);
-
-        string? password = null;
-        if (!string.IsNullOrEmpty(company.CertificatePasswordEncrypted))
-        {
-            password = _encryption.Decrypt(company.CertificatePasswordEncrypted);
-            _logger.LogDebug("  🔒 Decrypted password length: {Len}", password?.Length ?? 0);
-            
-            if (password != null && password != password.Trim())
-            {
-                _logger.LogWarning("  ⚠️ Password contains leading/trailing whitespace!");
-                _logger.LogWarning("  Original: '{Orig}' (len={OrigLen})", password, password.Length);
-                password = password.Trim();
-                _logger.LogWarning("  Trimmed: '{Trim}' (len={TrimLen})", password, password.Length);
-            }
-        }
-        else
-        {
-            _logger.LogDebug("  🔓 No password in database (unencrypted key expected)");
-        }
-
-        byte[] certBytes;
-        byte[] keyBytes;
-        
         try
         {
-            certBytes = Convert.FromBase64String(certBase64);
-            keyBytes = Convert.FromBase64String(keyBase64);
+            var certBase64 = _encryption.Decrypt(company.CertificateEncrypted);
+            var keyBase64 = _encryption.Decrypt(company.PrivateKeyEncrypted);
+
+            if (string.IsNullOrEmpty(certBase64) || string.IsNullOrEmpty(keyBase64))
+                return null;
+
+            string? password = null;
+            if (!string.IsNullOrEmpty(company.CertificatePasswordEncrypted))
+            {
+                password = _encryption.Decrypt(company.CertificatePasswordEncrypted)?.Trim();
+            }
+
+            var certBytes = Convert.FromBase64String(certBase64);
+            var keyBytes = Convert.FromBase64String(keyBase64);
+
+            var certText = Encoding.UTF8.GetString(certBytes);
+            var keyText = Encoding.UTF8.GetString(keyBytes);
+
+            if (!certText.Contains("-----BEGIN CERTIFICATE-----"))
+            {
+                _logger.LogError("Certificate missing PEM header for user {UserId}", userId);
+                return null;
+            }
+
+            if (!keyText.Contains("-----BEGIN") || !keyText.Contains("PRIVATE KEY"))
+            {
+                _logger.LogError("Private key missing PEM header for user {UserId}", userId);
+                return null;
+            }
+
+            _logger.LogInformation("Certificate decrypted for user {UserId}", userId);
+            return (certBytes, keyBytes, password);
         }
-        catch (FormatException ex)
+        catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Invalid Base64 format in encrypted certificate/key");
+            _logger.LogError(ex, "Failed to decrypt certificate for user {UserId}", userId);
             return null;
         }
-
-        _logger.LogDebug("  📄 Cert bytes length: {Len}", certBytes.Length);
-        _logger.LogDebug("  🔑 Key bytes length: {Len}", keyBytes.Length);
-
-        var certPreview = Encoding.UTF8.GetString(certBytes.Take(50).ToArray());
-        var keyPreview = Encoding.UTF8.GetString(keyBytes.Take(50).ToArray());
-        _logger.LogDebug("  📄 Cert preview (50 chars): {Preview}", certPreview);
-        _logger.LogDebug("  🔑 Key preview (50 chars): {Preview}", keyPreview);
-
-        var certText = Encoding.UTF8.GetString(certBytes);
-        var keyText = Encoding.UTF8.GetString(keyBytes);
-        
-        var hasCertHeader = certText.Contains("-----BEGIN CERTIFICATE-----");
-        var hasKeyHeader = keyText.Contains("-----BEGIN") && keyText.Contains("PRIVATE KEY");
-        
-        _logger.LogDebug("  📄 Has cert header: {HasHeader}", hasCertHeader);
-        _logger.LogDebug("  🔑 Has key header: {HasHeader}", hasKeyHeader);
-        
-        if (!hasCertHeader)
-        {
-            _logger.LogError("  ❌ Certificate doesn't contain PEM header!");
-            return null;
-        }
-        
-        if (!hasKeyHeader)
-        {
-            _logger.LogError("  ❌ Private key doesn't contain PEM header!");
-            return null;
-        }
-
-        _logger.LogInformation("  ✅ Certificate and key decrypted successfully");
-        return (certBytes, keyBytes, password);
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "❌ Failed to decrypt certificate for user {UserId}", userId);
-        return null;
-    }
-}
 
     public async Task<UserCertificateInfo?> GetCertificateInfoAsync(int userId)
     {
-        var company = await _db.CompanyProfiles
-            .FirstOrDefaultAsync(c => c.UserId == userId && c.IsActive);
-
+        var company = await _companyRepository.GetByUserIdAsync(userId);
         if (company == null) return null;
 
         var hasCert = !string.IsNullOrEmpty(company.CertificateEncrypted);
-        var hasKey = !string.IsNullOrEmpty(company.PrivateKeyEncrypted);
-        var hasPassword = !string.IsNullOrEmpty(company.CertificatePasswordEncrypted);
 
         if (!hasCert)
         {
@@ -526,15 +404,15 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
 
         try
         {
-            var certBase64 = _encryption.Decrypt(company.CertificateEncrypted);
+            var certBase64 = _encryption.Decrypt(company.CertificateEncrypted!);
             var certBytes = Convert.FromBase64String(certBase64);
             var cert = new X509Certificate2(certBytes);
 
             return new UserCertificateInfo
             {
-                HasCertificate = hasCert,
-                HasPrivateKey = hasKey,
-                IsPasswordProtected = hasPassword,
+                HasCertificate = true,
+                HasPrivateKey = !string.IsNullOrEmpty(company.PrivateKeyEncrypted),
+                IsPasswordProtected = !string.IsNullOrEmpty(company.CertificatePasswordEncrypted),
                 UploadedAt = company.UpdatedAt ?? company.CreatedAt,
                 SubjectName = cert.Subject,
                 NotBefore = cert.NotBefore,
@@ -545,9 +423,9 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         {
             return new UserCertificateInfo
             {
-                HasCertificate = hasCert,
-                HasPrivateKey = hasKey,
-                IsPasswordProtected = hasPassword,
+                HasCertificate = true,
+                HasPrivateKey = !string.IsNullOrEmpty(company.PrivateKeyEncrypted),
+                IsPasswordProtected = !string.IsNullOrEmpty(company.CertificatePasswordEncrypted),
                 UploadedAt = company.UpdatedAt ?? company.CreatedAt
             };
         }
@@ -583,7 +461,10 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private List<string> ValidateRegister(RegisterRequest request)
+    private static AppAuthResult Fail(string error) =>
+        new() { Success = false, Error = error };
+
+    private static List<string> ValidateRegister(RegisterRequest request)
     {
         var errors = new List<string>();
 
@@ -603,7 +484,7 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         return errors;
     }
 
-    private List<string> ValidateCompanySetup(CompanySetupRequest request)
+    private static List<string> ValidateCompanySetup(CompanySetupRequest request)
     {
         var errors = new List<string>();
 
@@ -626,7 +507,7 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         return errors;
     }
 
-    private List<string> ValidateCompanyProfile(UpdateCompanyProfileRequest request)
+    private static List<string> ValidateCompanyProfile(UpdateCompanyProfileRequest request)
     {
         var errors = new List<string>();
 
@@ -640,9 +521,8 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
 
         return errors;
     }
-    
-    
-    private UserInfo MapUserInfo(User user)
+
+    private static UserInfo MapUserInfo(User user)
     {
         return new UserInfo
         {
