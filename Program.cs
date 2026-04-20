@@ -28,7 +28,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(connectionString);
 });
 
-var jwtKey = builder.Configuration.GetValue<string>("Jwt:Key") ?? "FallbackKeyForDev2025!MinLen32Chars!!";
+var jwtKeyRaw = builder.Configuration.GetValue<string>("Jwt:Key");
+var jwtKey = string.IsNullOrWhiteSpace(jwtKeyRaw)
+    ? "FallbackKeyForDev2025!MinLen32Chars!!"
+    : jwtKeyRaw;
 var jwtIssuer = builder.Configuration.GetValue<string>("Jwt:Issuer") ?? "KSeFMaster";
 var jwtAudience = builder.Configuration.GetValue<string>("Jwt:Audience") ?? "KSeFMasterApp";
 
@@ -62,7 +65,7 @@ builder.Services.AddSwaggerGen(c =>
     {
         Title = "KSeF Backend API",
         Version = "v1",
-        Description = "Backend do integracji z Krajowym Systemem e-Faktur (środowisko testowe)"
+        Description = "Backend do integracji z Krajowym Systemem e-Faktur"
     });
 
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
@@ -91,8 +94,9 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-var ksefBaseUrl = builder.Configuration.GetValue<string>("KSeF:BaseUrl")
-    ?? "https://ksef-test.mf.gov.pl/api/v2";
+var defaultEnv = builder.Configuration.GetValue<string>("KSeF:DefaultEnvironment") ?? "Test";
+var ksefBaseUrl = builder.Configuration.GetValue<string>($"KSeF:Environments:{defaultEnv}:ApiBaseUrl")
+    ?? "https://api-test.ksef.mf.gov.pl/v2/";
 var timeoutSeconds = builder.Configuration.GetValue<int>("KSeF:TimeoutSeconds", 60);
 
 builder.Services.AddTransient<KSeFHttpLoggingHandler>();
@@ -168,7 +172,7 @@ app.MapGet("/", () => Results.Ok(new
     status = "healthy",
     service = "KSeF Backend API",
     timestamp = DateTime.UtcNow,
-    environment = "KSeF Test"
+    environment = $"KSeF {defaultEnv}"
 }));
 
 app.MapGet("/health", () => Results.Ok(new
@@ -182,6 +186,6 @@ var url = $"http://0.0.0.0:{port}";
 
 app.Logger.LogInformation("KSeF Backend API starting on: {Url}", url);
 app.Logger.LogInformation("Swagger UI: {Url}/swagger", url);
-app.Logger.LogInformation("KSeF API: {KSeFUrl}", ksefBaseUrl);
+app.Logger.LogInformation("KSeF API ({Env}): {KSeFUrl}", defaultEnv, ksefBaseUrl);
 
 app.Run(url);

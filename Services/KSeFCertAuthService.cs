@@ -24,16 +24,19 @@ public class KSeFCertAuthService : IKSeFCertAuthService
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly KSeFSessionManager _session;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<KSeFCertAuthService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
 
     public KSeFCertAuthService(
         IHttpClientFactory httpClientFactory,
         KSeFSessionManager session,
+        IConfiguration configuration,
         ILogger<KSeFCertAuthService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _session = session;
+        _configuration = configuration;
         _logger = logger;
         _jsonOptions = new JsonSerializerOptions
         {
@@ -42,20 +45,41 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         };
     }
 
+    private HttpClient CreateClient(string environment)
+    {
+        var apiBaseUrl = GetApiBaseUrl(environment);
+        var client = _httpClientFactory.CreateClient("KSeF");
+        client.BaseAddress = new Uri(apiBaseUrl);
+        return client;
+    }
+
+    private string GetApiBaseUrl(string environment)
+    {
+        var url = _configuration.GetValue<string>($"KSeF:Environments:{environment}:ApiBaseUrl");
+        if (!string.IsNullOrWhiteSpace(url))
+            return url;
+
+        return environment == "Production"
+            ? "https://api.ksef.mf.gov.pl/v2/"
+            : "https://api-test.ksef.mf.gov.pl/v2/";
+    }
+
     public async Task<AuthResult> AuthenticateWithCertificateAsync(
         string nip,
         byte[] certificateBytes,
         byte[] privateKeyBytes,
         string? password,
+        string environment = "Test",
         CancellationToken cancellationToken = default)
     {
         try
         {
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-            _logger.LogInformation("  LOGOWANIE CERTYFIKATEM DO KSeF API v2 — NIP: {Nip}", nip);
+            _logger.LogInformation("  LOGOWANIE CERTYFIKATEM DO KSeF API v2 — NIP: {Nip}, ENV: {Env}",
+                nip, environment);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
-            var client = _httpClientFactory.CreateClient("KSeF");
+            var client = CreateClient(environment);
 
             _logger.LogInformation("--- Krok 1: Ładowanie certyfikatu ---");
             var certificate = LoadCertificate(certificateBytes, privateKeyBytes, password);
@@ -140,9 +164,6 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // ECDSA — ręczny podpis (SignedXml nie obsługuje ECDSA)
-    // ─────────────────────────────────────────────────────────────
     private string SignXmlEcdsa(string xmlContent, X509Certificate2 cert, ECDsa privateKey)
     {
         var doc = new XmlDocument { PreserveWhitespace = false };
@@ -157,10 +178,8 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         var certDigest = Convert.ToBase64String(SHA256.HashData(certDer));
         var serialNumber = GetSerialNumberAsDecimal(cert);
 
-        // 1. Hash oryginalnego dokumentu (C14N)
         var docHash = ComputeDocumentHash(doc);
 
-        // 2. Buduj SignedProperties i oblicz hash
         var signedPropsXml = BuildSignedPropertiesXml(
             signedPropsId, signingTime, certDigest, cert.Issuer, serialNumber);
 
@@ -168,11 +187,9 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         signedPropsDoc.LoadXml(signedPropsXml);
         var signedPropsHash = ComputeC14NHash(signedPropsDoc);
 
-        // 3. Buduj SignedInfo
         var signedInfoXml = BuildSignedInfoXml(
             docHash, signedPropsHash, signedPropsId, EcdsaSha256Algorithm);
 
-        // 4. Kanonizuj SignedInfo i podpisz ECDSA
         var signedInfoDoc = new XmlDocument { PreserveWhitespace = false };
         signedInfoDoc.LoadXml(signedInfoXml);
         var signedInfoCanonical = GetC14N(signedInfoDoc);
@@ -181,15 +198,11 @@ public class KSeFCertAuthService : IKSeFCertAuthService
             HashAlgorithmName.SHA256);
         var signatureValue = Convert.ToBase64String(signatureBytes);
 
-        // 5. Złóż finalny XML
         return AssembleSignedXml(
             doc, signatureId, signedInfoXml,
             signatureValue, certBase64, signedPropsXml);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // RSA — używamy SignedXml (obsługiwane natywnie)
-    // ─────────────────────────────────────────────────────────────
     private string SignXmlRsa(string xmlContent, X509Certificate2 cert, RSA privateKey)
     {
         var doc = new XmlDocument { PreserveWhitespace = false };
@@ -204,10 +217,8 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         var certDigest = Convert.ToBase64String(SHA256.HashData(certDer));
         var serialNumber = GetSerialNumberAsDecimal(cert);
 
-        // 1. Hash oryginalnego dokumentu
         var docHash = ComputeDocumentHash(doc);
 
-        // 2. SignedProperties i hash
         var signedPropsXml = BuildSignedPropertiesXml(
             signedPropsId, signingTime, certDigest, cert.Issuer, serialNumber);
 
@@ -215,11 +226,9 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         signedPropsDoc.LoadXml(signedPropsXml);
         var signedPropsHash = ComputeC14NHash(signedPropsDoc);
 
-        // 3. SignedInfo
         var signedInfoXml = BuildSignedInfoXml(
             docHash, signedPropsHash, signedPropsId, RsaSha256Algorithm);
 
-        // 4. Podpis RSA
         var signedInfoDoc = new XmlDocument { PreserveWhitespace = false };
         signedInfoDoc.LoadXml(signedInfoXml);
         var signedInfoCanonical = GetC14N(signedInfoDoc);
@@ -229,20 +238,13 @@ public class KSeFCertAuthService : IKSeFCertAuthService
             RSASignaturePadding.Pkcs1);
         var signatureValue = Convert.ToBase64String(signatureBytes);
 
-        // 5. Złóż finalny XML
         return AssembleSignedXml(
             doc, signatureId, signedInfoXml,
             signatureValue, certBase64, signedPropsXml);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Helpers — budowanie XML i obliczanie hashy
-    // ─────────────────────────────────────────────────────────────
-
     private string ComputeDocumentHash(XmlDocument doc)
     {
-        // ✅ Kluczowe: hash musi być policzony z dokumentu BEZ Signature
-        // Używamy XmlDsigExcC14NTransform na kopii dokumentu
         var copy = new XmlDocument { PreserveWhitespace = false };
         copy.LoadXml(doc.OuterXml);
         var c14n = GetC14N(copy);
@@ -273,7 +275,6 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         string issuer,
         string serialNumber)
     {
-        // ✅ Bez whitespace, wszystkie namespace na root elemencie
         return $@"<xades:SignedProperties xmlns:xades=""{XadesNamespace}"" xmlns:ds=""{XmlDsigNamespace}"" Id=""{signedPropsId}""><xades:SignedSignatureProperties><xades:SigningTime>{signingTime}</xades:SigningTime><xades:SigningCertificate><xades:Cert><xades:CertDigest><ds:DigestMethod Algorithm=""{Sha256Algorithm}""/><ds:DigestValue>{certDigest}</ds:DigestValue></xades:CertDigest><xades:IssuerSerial><ds:X509IssuerName>{issuer}</ds:X509IssuerName><ds:X509SerialNumber>{serialNumber}</ds:X509SerialNumber></xades:IssuerSerial></xades:Cert></xades:SigningCertificate></xades:SignedSignatureProperties></xades:SignedProperties>";
     }
 
@@ -324,7 +325,6 @@ public class KSeFCertAuthService : IKSeFCertAuthService
 
     private string BuildAuthTokenRequestXml(string challenge, string nip)
     {
-        // ✅ certificateSubject - certyfikat ma NIP w Subject DN (OID.2.5.4.97)
         return $@"<?xml version=""1.0"" encoding=""UTF-8""?><AuthTokenRequest xmlns=""http://ksef.mf.gov.pl/auth/token/2.0""><Challenge>{challenge}</Challenge><ContextIdentifier><Nip>{nip}</Nip></ContextIdentifier><SubjectIdentifierType>certificateSubject</SubjectIdentifierType></AuthTokenRequest>";
     }
 

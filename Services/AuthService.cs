@@ -1,5 +1,4 @@
-﻿// Services/AuthService.cs
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -123,6 +122,7 @@ public class AuthService : IAuthService
             Nip = request.Nip.Trim(),
             KsefTokenEncrypted = encryptedToken,
             AuthMethod = "token",
+            KsefEnvironment = request.KsefEnvironment,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -130,7 +130,8 @@ public class AuthService : IAuthService
         _db.CompanyProfiles.Add(company);
         await _db.SaveChangesAsync();
 
-        _logger.LogInformation("Company configured for user {UserId}: NIP {Nip}", userId, request.Nip);
+        _logger.LogInformation("Company configured for user {UserId}: NIP {Nip}, Environment {Env}", 
+            userId, request.Nip, request.KsefEnvironment);
 
         var token = GenerateJwt(user);
         user.CompanyProfile = company;
@@ -197,6 +198,36 @@ public class AuthService : IAuthService
         var userInfo = MapUserInfo(user);
         return new AppAuthResult { Success = true, User = userInfo };
     }
+
+    public async Task<AppAuthResult> UpdateKsefEnvironmentAsync(int userId, UpdateKsefEnvironmentRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.KsefEnvironment))
+            return new AppAuthResult { Success = false, Error = "Środowisko KSeF jest wymagane" };
+
+        if (request.KsefEnvironment != "Test" && request.KsefEnvironment != "Production")
+            return new AppAuthResult { Success = false, Error = "Dozwolone środowiska: 'Test' lub 'Production'" };
+
+        var user = await _db.Users
+            .Include(u => u.CompanyProfile)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null)
+            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+
+        if (user.CompanyProfile == null)
+            return new AppAuthResult { Success = false, Error = "Najpierw skonfiguruj firmę" };
+
+        user.CompanyProfile.KsefEnvironment = request.KsefEnvironment;
+        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("⚙️ KSeF environment switched to {Environment} for user {UserId}", 
+            request.KsefEnvironment, userId);
+
+        var userInfo = MapUserInfo(user);
+        return new AppAuthResult { Success = true, User = userInfo };
+    }
     
     public async Task<string?> GetDecryptedKsefTokenAsync(int userId)
     {
@@ -235,14 +266,12 @@ public async Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertif
         _logger.LogDebug("  Key Base64 length: {Len}", request.PrivateKeyBase64?.Length ?? 0);
         _logger.LogDebug("  Password provided: {HasPwd}", !string.IsNullOrEmpty(request.Password));
 
-        // ✅ Walidacja Base64
         if (string.IsNullOrWhiteSpace(request.CertificateBase64))
             return new AppAuthResult { Success = false, Error = "Certyfikat jest wymagany" };
 
         if (string.IsNullOrWhiteSpace(request.PrivateKeyBase64))
             return new AppAuthResult { Success = false, Error = "Klucz prywatny jest wymagany" };
 
-        // ✅ Konwersja i walidacja
         byte[] certBytes;
         byte[] keyBytes;
 
@@ -259,7 +288,6 @@ public async Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertif
         _logger.LogDebug("  Cert bytes length: {Len}", certBytes.Length);
         _logger.LogDebug("  Key bytes length: {Len}", keyBytes.Length);
 
-        // ✅ Sprawdzenie czy to PEM
         var certText = Encoding.UTF8.GetString(certBytes);
         var keyText = Encoding.UTF8.GetString(keyBytes);
 
@@ -275,7 +303,6 @@ public async Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertif
 
         _logger.LogDebug("  ✓ PEM format detected");
 
-        // ✅ Walidacja certyfikatu (tylko publiczny dla sprawdzenia struktury)
         X509Certificate2 publicCert;
         try
         {
@@ -289,11 +316,9 @@ public async Task<AppAuthResult> UploadCertificateAsync(int userId, UploadCertif
             return new AppAuthResult { Success = false, Error = $"Nieprawidłowy certyfikat: {ex.Message}" };
         }
 
-        // ✅ Zapisanie (szyfrowanie ORYGINALNYCH Base64 stringów)
         user.CompanyProfile.CertificateEncrypted = _encryption.Encrypt(request.CertificateBase64.Trim());
         user.CompanyProfile.PrivateKeyEncrypted = _encryption.Encrypt(request.PrivateKeyBase64.Trim());
 
-        // ✅ FIX: Trim hasła + debug log
         if (!string.IsNullOrEmpty(request.Password))
         {
             var passwordTrimmed = request.Password.Trim();
@@ -400,7 +425,6 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
     {
         _logger.LogInformation("🔐 Decrypting certificate for user {UserId}", userId);
 
-        // ✅ Deszyfrowanie Base64 stringów z bazy
         var certBase64 = _encryption.Decrypt(company.CertificateEncrypted);
         var keyBase64 = _encryption.Decrypt(company.PrivateKeyEncrypted);
 
@@ -413,7 +437,6 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
             password = _encryption.Decrypt(company.CertificatePasswordEncrypted);
             _logger.LogDebug("  🔒 Decrypted password length: {Len}", password?.Length ?? 0);
             
-            // ✅ DEBUG: Sprawdź białe znaki
             if (password != null && password != password.Trim())
             {
                 _logger.LogWarning("  ⚠️ Password contains leading/trailing whitespace!");
@@ -427,7 +450,6 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
             _logger.LogDebug("  🔓 No password in database (unencrypted key expected)");
         }
 
-        // ✅ Konwersja Base64 → bytes (to są bytes PEM text)
         byte[] certBytes;
         byte[] keyBytes;
         
@@ -445,13 +467,11 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         _logger.LogDebug("  📄 Cert bytes length: {Len}", certBytes.Length);
         _logger.LogDebug("  🔑 Key bytes length: {Len}", keyBytes.Length);
 
-        // ✅ DEBUG: Sprawdź czy to faktycznie PEM
         var certPreview = Encoding.UTF8.GetString(certBytes.Take(50).ToArray());
         var keyPreview = Encoding.UTF8.GetString(keyBytes.Take(50).ToArray());
         _logger.LogDebug("  📄 Cert preview (50 chars): {Preview}", certPreview);
         _logger.LogDebug("  🔑 Key preview (50 chars): {Preview}", keyPreview);
 
-        // ✅ Sprawdź czy PEM ma poprawne headery
         var certText = Encoding.UTF8.GetString(certBytes);
         var keyText = Encoding.UTF8.GetString(keyBytes);
         
@@ -600,6 +620,9 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         else if (!request.KsefToken.Contains('|'))
             errors.Add("Nieprawidłowy format tokenu KSeF");
 
+        if (request.KsefEnvironment != "Test" && request.KsefEnvironment != "Production")
+            errors.Add("Dozwolone środowiska: 'Test' lub 'Production'");
+
         return errors;
     }
 
@@ -635,6 +658,7 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
                     IsActive = user.CompanyProfile.IsActive,
                     HasKsefToken = !string.IsNullOrEmpty(user.CompanyProfile.KsefTokenEncrypted),
                     AuthMethod = user.CompanyProfile.AuthMethod,
+                    KsefEnvironment = user.CompanyProfile.KsefEnvironment,
                     HasCertificate = !string.IsNullOrEmpty(user.CompanyProfile.CertificateEncrypted)
                 }
                 : null

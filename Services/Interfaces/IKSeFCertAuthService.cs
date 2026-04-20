@@ -1,5 +1,4 @@
-﻿// Services/Interfaces/IKSeFCertAuthService.cs
-using KSeF.Backend.Models.Responses;
+﻿using KSeF.Backend.Models.Responses;
 
 namespace KSeF.Backend.Services.Interfaces;
 
@@ -10,6 +9,7 @@ public interface IKSeFCertAuthService
         byte[] certificateBytes,
         byte[] privateKeyBytes,
         string? password,
+        string environment = "Test",
         CancellationToken cancellationToken = default
     );
 }
