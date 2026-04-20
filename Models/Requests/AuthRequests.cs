@@ -19,6 +19,7 @@ public class CompanySetupRequest
     public string CompanyName { get; set; } = string.Empty;
     public string Nip { get; set; } = string.Empty;
     public string KsefToken { get; set; } = string.Empty;
+    public string KsefEnvironment { get; set; } = "Test";
 }
 
 public class UpdateCompanyProfileRequest
@@ -30,4 +31,9 @@ public class UpdateCompanyProfileRequest
 public class UpdateKsefTokenRequest
 {
     public string KsefToken { get; set; } = string.Empty;
+}
+
+public class UpdateKsefEnvironmentRequest
+{
+    public string KsefEnvironment { get; set; } = string.Empty;
 }

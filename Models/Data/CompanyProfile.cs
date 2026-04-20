@@ -1,5 +1,4 @@
-﻿// Models/Data/CompanyProfile.cs
-namespace KSeF.Backend.Models.Data;
+﻿namespace KSeF.Backend.Models.Data;
 
 public class CompanyProfile
 {
@@ -11,6 +10,8 @@ public class CompanyProfile
     public string? KsefTokenEncrypted { get; set; }
     
     public string AuthMethod { get; set; } = "token";
+    public string KsefEnvironment { get; set; } = "Test";
+    
     public string? CertificateEncrypted { get; set; }
     public string? PrivateKeyEncrypted { get; set; }
     public string? CertificatePasswordEncrypted { get; set; }

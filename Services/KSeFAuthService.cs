@@ -12,6 +12,7 @@ public class KSeFAuthService : IKSeFAuthService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IKSeFCryptoService _cryptoService;
     private readonly KSeFSessionManager _session;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<KSeFAuthService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -19,11 +20,13 @@ public class KSeFAuthService : IKSeFAuthService
         IHttpClientFactory httpClientFactory,
         IKSeFCryptoService cryptoService,
         KSeFSessionManager session,
+        IConfiguration configuration,
         ILogger<KSeFAuthService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _cryptoService = cryptoService;
         _session = session;
+        _configuration = configuration;
         _logger = logger;
         _jsonOptions = new JsonSerializerOptions
         {
@@ -32,17 +35,38 @@ public class KSeFAuthService : IKSeFAuthService
         };
     }
 
-    private HttpClient CreateClient() => _httpClientFactory.CreateClient("KSeF");
+    private HttpClient CreateClient(string environment)
+    {
+        var apiBaseUrl = GetApiBaseUrl(environment);
+        var client = _httpClientFactory.CreateClient("KSeF");
+        client.BaseAddress = new Uri(apiBaseUrl);
+        return client;
+    }
 
-    public async Task<AuthResult> LoginAsync(string nip, string ksefToken, CancellationToken ct = default)
+    private string GetApiBaseUrl(string environment)
+    {
+        var url = _configuration.GetValue<string>($"KSeF:Environments:{environment}:ApiBaseUrl");
+        if (!string.IsNullOrWhiteSpace(url))
+            return url;
+
+        return environment == "Production"
+            ? "https://api.ksef.mf.gov.pl/v2/"
+            : "https://api-test.ksef.mf.gov.pl/v2/";
+    }
+
+    public async Task<AuthResult> LoginAsync(
+        string nip,
+        string ksefToken,
+        string environment = "Test",
+        CancellationToken ct = default)
     {
         try
         {
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-            _logger.LogInformation("  LOGOWANIE DO KSeF API v2 — NIP: {Nip}", nip);
+            _logger.LogInformation("  LOGOWANIE DO KSeF API v2 — NIP: {Nip}, ENV: {Env}", nip, environment);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
-            var client = CreateClient();
+            var client = CreateClient(environment);
             _logger.LogInformation("  BaseAddress: {BaseAddress}", client.BaseAddress);
 
             _logger.LogInformation("--- Krok 1: GET /security/public-key-certificates ---");
@@ -146,7 +170,8 @@ public class KSeFAuthService : IKSeFAuthService
                 var statusResponse = await client.SendAsync(statusRequest, ct);
                 var statusContent = await statusResponse.Content.ReadAsStringAsync(ct);
 
-                _logger.LogInformation("  [Próba {A}/{Max}] HTTP {Code}", attempt, maxAttempts, (int)statusResponse.StatusCode);
+                _logger.LogInformation("  [Próba {A}/{Max}] HTTP {Code}",
+                    attempt, maxAttempts, (int)statusResponse.StatusCode);
                 _logger.LogInformation("  Body: {Body}", SanitizeForLog(statusContent));
 
                 if (!statusResponse.IsSuccessStatusCode)
@@ -161,7 +186,6 @@ public class KSeFAuthService : IKSeFAuthService
                 _logger.LogInformation("  Status.Code={Code}, Status.Description={Desc}",
                     statusCode, status?.Status?.Description);
 
-                // ✅ Sukces - mamy AccessToken bezpośrednio w odpowiedzi statusu
                 if (status?.AccessToken != null && !string.IsNullOrEmpty(status.AccessToken.Token))
                 {
                     _logger.LogInformation("  ✓ AccessToken w odpowiedzi statusu — sukces!");
@@ -173,13 +197,13 @@ public class KSeFAuthService : IKSeFAuthService
                     return new AuthResult
                     {
                         Success = true,
+                        SessionToken = status.AccessToken.Token,
                         ReferenceNumber = referenceNumber,
                         AccessTokenValidUntil = status.AccessToken.ValidUntil,
                         RefreshTokenValidUntil = status.RefreshToken?.ValidUntil
                     };
                 }
 
-                // ✅ Status 200 (kod KSeF) - gotowy do token/redeem
                 if (statusCode == 200)
                 {
                     _logger.LogInformation("  ✓ Status code=200 — gotowy do token/redeem");
@@ -187,9 +211,6 @@ public class KSeFAuthService : IKSeFAuthService
                     break;
                 }
 
-                // ✅ Statusy "w toku" - czekaj i próbuj ponownie
-                // 100 = "Uwierzytelnianie w toku" (nowe API v2)
-                // 450 = stary status "w toku"
                 if (statusCode == 100 || statusCode == 450)
                 {
                     _logger.LogInformation("  ⏳ Status {Code} ({Desc}) — czekam {Delay}ms...",
@@ -199,7 +220,6 @@ public class KSeFAuthService : IKSeFAuthService
                     continue;
                 }
 
-                // ✅ Nieoczekiwany kod - błąd
                 _logger.LogError("  ✗ Nieoczekiwany status code: {Code} — {Desc}",
                     statusCode, status?.Status?.Description);
                 return new AuthResult
@@ -260,6 +280,7 @@ public class KSeFAuthService : IKSeFAuthService
             return new AuthResult
             {
                 Success = true,
+                SessionToken = tokens.AccessToken.Token,
                 ReferenceNumber = referenceNumber,
                 AccessTokenValidUntil = tokens.AccessToken.ValidUntil,
                 RefreshTokenValidUntil = tokens.RefreshToken?.ValidUntil
@@ -296,7 +317,7 @@ public class KSeFAuthService : IKSeFAuthService
 
         try
         {
-            var client = CreateClient();
+            var client = _httpClientFactory.CreateClient("KSeF");
             using var request = new HttpRequestMessage(HttpMethod.Post, "auth/token/refresh");
             request.Headers.Add("Authorization", $"Bearer {_session.RefreshToken}");
             request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
@@ -345,7 +366,8 @@ public class KSeFAuthService : IKSeFAuthService
         var content = await response.Content.ReadAsStringAsync(ct);
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "unknown";
 
-        _logger.LogInformation("  Response status: {Status} ({Code})", response.StatusCode, (int)response.StatusCode);
+        _logger.LogInformation("  Response status: {Status} ({Code})",
+            response.StatusCode, (int)response.StatusCode);
         _logger.LogInformation("  Content-Type: {CT}", contentType);
         _logger.LogDebug("  Body: {Body}", content.Length > 500 ? content[..500] + "..." : content);
 
@@ -421,7 +443,8 @@ public class KSeFAuthService : IKSeFAuthService
             ct);
 
         var content = await response.Content.ReadAsStringAsync(ct);
-        _logger.LogInformation("  Response status: {Status} ({Code})", response.StatusCode, (int)response.StatusCode);
+        _logger.LogInformation("  Response status: {Status} ({Code})",
+            response.StatusCode, (int)response.StatusCode);
         _logger.LogDebug("  Body: {Body}", content);
 
         if (!response.IsSuccessStatusCode)

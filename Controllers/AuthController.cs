@@ -1,7 +1,7 @@
 ﻿// Controllers/AuthController.cs
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces;
@@ -10,23 +10,31 @@ namespace KSeF.Backend.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-[Produces("application/json")]
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly IKSeFAuthService _ksefAuthService;
+    private readonly IKSeFCertAuthService _ksefCertAuthService;
+    private readonly KSeFSessionManager _sessionManager;
     private readonly ILogger<AuthController> _logger;
 
-    public AuthController(IAuthService authService, ILogger<AuthController> logger)
+    public AuthController(
+        IAuthService authService,
+        IKSeFAuthService ksefAuthService,
+        IKSeFCertAuthService ksefCertAuthService,
+        KSeFSessionManager sessionManager,
+        ILogger<AuthController> logger)
     {
         _authService = authService;
+        _ksefAuthService = ksefAuthService;
+        _ksefCertAuthService = ksefCertAuthService;
+        _sessionManager = sessionManager;
         _logger = logger;
     }
 
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        _logger.LogInformation("=== REGISTER REQUEST: {Email} ===", request.Email);
-
         var result = await _authService.RegisterAsync(request);
 
         if (!result.Success)
@@ -35,7 +43,6 @@ public class AuthController : ControllerBase
         return Ok(new
         {
             success = true,
-            message = "Konto utworzone pomyślnie",
             data = new
             {
                 token = result.Token,
@@ -47,17 +54,14 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginAppRequest request)
     {
-        _logger.LogInformation("=== APP LOGIN REQUEST: {Email} ===", request.Email);
-
         var result = await _authService.LoginAsync(request);
 
         if (!result.Success)
-            return Unauthorized(new { success = false, error = result.Error });
+            return BadRequest(new { success = false, error = result.Error });
 
         return Ok(new
         {
             success = true,
-            message = "Zalogowano pomyślnie",
             data = new
             {
                 token = result.Token,
@@ -66,33 +70,42 @@ public class AuthController : ControllerBase
         });
     }
 
-    [HttpGet("me")]
     [Authorize]
+    [HttpGet("me")]
     public async Task<IActionResult> GetMe()
     {
-        var userId = GetUserId();
-        if (userId == null)
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
             return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-        var user = await _authService.GetUserByIdAsync(userId.Value);
-
+        var user = await _authService.GetUserByIdAsync(userId);
         if (user == null)
             return NotFound(new { success = false, error = "Użytkownik nie istnieje" });
 
-        return Ok(new { success = true, data = user });
+        var isKsefConnected = _sessionManager.IsAuthenticated;
+        var needsCompanySetup = user.Company == null;
+
+        return Ok(new
+        {
+            success = true,
+            data = new
+            {
+                user = user,
+                isKsefConnected = isKsefConnected,
+                needsCompanySetup = needsCompanySetup
+            }
+        });
     }
 
-    [HttpPost("company")]
     [Authorize]
+    [HttpPost("company")]
     public async Task<IActionResult> SetupCompany([FromBody] CompanySetupRequest request)
     {
-        var userId = GetUserId();
-        if (userId == null)
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
             return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-        _logger.LogInformation("=== COMPANY SETUP: User {UserId}, NIP {Nip} ===", userId, request.Nip);
-
-        var result = await _authService.SetupCompanyAsync(userId.Value, request);
+        var result = await _authService.SetupCompanyAsync(userId, request);
 
         if (!result.Success)
             return BadRequest(new { success = false, error = result.Error });
@@ -100,7 +113,7 @@ public class AuthController : ControllerBase
         return Ok(new
         {
             success = true,
-            message = "Firma skonfigurowana pomyślnie",
+            message = "Firma została skonfigurowana",
             data = new
             {
                 token = result.Token,
@@ -109,86 +122,15 @@ public class AuthController : ControllerBase
         });
     }
 
-    [HttpPut("company/token")]
     [Authorize]
-    public async Task<IActionResult> UpdateKsefToken([FromBody] UpdateKsefTokenRequest request)
-    {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
-
-        _logger.LogInformation("=== UPDATE KSEF TOKEN: User {UserId} ===", userId);
-
-        var result = await _authService.UpdateKsefTokenAsync(userId.Value, request);
-
-        if (!result.Success)
-            return BadRequest(new { success = false, error = result.Error });
-
-        return Ok(new
-        {
-            success = true,
-            message = "Token KSeF zaktualizowany pomyślnie",
-            data = result.User
-        });
-    }
-
-    [HttpPost("company/certificate")]
-    [Authorize]
-    public async Task<IActionResult> UploadCertificate([FromBody] UploadCertificateRequest request)
-    {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
-
-        _logger.LogInformation("=== UPLOAD CERTIFICATE: User {UserId} ===", userId);
-
-        var result = await _authService.UploadCertificateAsync(userId.Value, request);
-
-        if (!result.Success)
-            return BadRequest(new { success = false, error = result.Error });
-
-        return Ok(new
-        {
-            success = true,
-            message = "Certyfikat przesłany pomyślnie",
-            data = result.User
-        });
-    }
-
-    [HttpPut("company/auth-method")]
-    [Authorize]
-    public async Task<IActionResult> SwitchAuthMethod([FromBody] SwitchAuthMethodRequest request)
-    {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
-
-        _logger.LogInformation("=== SWITCH AUTH METHOD: User {UserId}, Method {Method} ===", userId, request.AuthMethod);
-
-        var result = await _authService.SwitchAuthMethodAsync(userId.Value, request);
-
-        if (!result.Success)
-            return BadRequest(new { success = false, error = result.Error });
-
-        return Ok(new
-        {
-            success = true,
-            message = $"Metoda uwierzytelniania zmieniona na '{request.AuthMethod}'",
-            data = result.User
-        });
-    }
-
     [HttpPut("company/profile")]
-    [Authorize]
     public async Task<IActionResult> UpdateCompanyProfile([FromBody] UpdateCompanyProfileRequest request)
     {
-        var userId = GetUserId();
-        if (userId == null)
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
             return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-        _logger.LogInformation("=== UPDATE COMPANY PROFILE: User {UserId}, NIP {Nip} ===", userId, request.Nip);
-
-        var result = await _authService.UpdateCompanyProfileAsync(userId.Value, request);
+        var result = await _authService.UpdateCompanyProfileAsync(userId, request);
 
         if (!result.Success)
             return BadRequest(new { success = false, error = result.Error });
@@ -196,22 +138,122 @@ public class AuthController : ControllerBase
         return Ok(new
         {
             success = true,
-            message = "Dane firmy zaktualizowane pomyślnie",
-            data = result.User
+            message = "Profil firmy zaktualizowany",
+            data = new
+            {
+                user = result.User
+            }
         });
     }
-    
-    [HttpDelete("company/certificate")]
+
     [Authorize]
+    [HttpPut("company/token")]
+    public async Task<IActionResult> UpdateKsefToken([FromBody] UpdateKsefTokenRequest request)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
+
+        var result = await _authService.UpdateKsefTokenAsync(userId, request);
+
+        if (!result.Success)
+            return BadRequest(new { success = false, error = result.Error });
+
+        return Ok(new
+        {
+            success = true,
+            message = "Token KSeF zaktualizowany",
+            data = new
+            {
+                user = result.User
+            }
+        });
+    }
+
+    [Authorize]
+    [HttpPut("company/environment")]
+    public async Task<IActionResult> UpdateKsefEnvironment([FromBody] UpdateKsefEnvironmentRequest request)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
+
+        var result = await _authService.UpdateKsefEnvironmentAsync(userId, request);
+
+        if (!result.Success)
+            return BadRequest(new { success = false, error = result.Error });
+
+        _logger.LogInformation("⚙️ User {UserId} switched KSeF environment to {Env}",
+            userId, request.KsefEnvironment);
+
+        return Ok(new
+        {
+            success = true,
+            message = $"Środowisko KSeF zmienione na: {request.KsefEnvironment}",
+            data = new
+            {
+                user = result.User
+            }
+        });
+    }
+
+    [Authorize]
+    [HttpPost("company/certificate")]
+    public async Task<IActionResult> UploadCertificate([FromBody] UploadCertificateRequest request)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
+
+        var result = await _authService.UploadCertificateAsync(userId, request);
+
+        if (!result.Success)
+            return BadRequest(new { success = false, error = result.Error });
+
+        return Ok(new
+        {
+            success = true,
+            message = "Certyfikat został przesłany",
+            data = new
+            {
+                user = result.User
+            }
+        });
+    }
+
+    [Authorize]
+    [HttpPut("company/auth-method")]
+    public async Task<IActionResult> SwitchAuthMethod([FromBody] SwitchAuthMethodRequest request)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
+
+        var result = await _authService.SwitchAuthMethodAsync(userId, request);
+
+        if (!result.Success)
+            return BadRequest(new { success = false, error = result.Error });
+
+        return Ok(new
+        {
+            success = true,
+            message = $"Metoda uwierzytelniania zmieniona na: {request.AuthMethod}",
+            data = new
+            {
+                user = result.User
+            }
+        });
+    }
+
+    [Authorize]
+    [HttpDelete("company/certificate")]
     public async Task<IActionResult> DeleteCertificate()
     {
-        var userId = GetUserId();
-        if (userId == null)
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
             return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-        _logger.LogInformation("=== DELETE CERTIFICATE: User {UserId} ===", userId);
-
-        var result = await _authService.DeleteCertificateAsync(userId.Value);
+        var result = await _authService.DeleteCertificateAsync(userId);
 
         if (!result.Success)
             return BadRequest(new { success = false, error = result.Error });
@@ -219,196 +261,151 @@ public class AuthController : ControllerBase
         return Ok(new
         {
             success = true,
-            message = "Certyfikat usunięty. Metoda zmieniona na 'token'.",
-            data = result.User
+            message = "Certyfikat został usunięty",
+            data = new
+            {
+                user = result.User
+            }
         });
     }
 
-    [HttpGet("company/certificate/info")]
     [Authorize]
+    [HttpGet("company/certificate/info")]
     public async Task<IActionResult> GetCertificateInfo()
     {
-        var userId = GetUserId();
-        if (userId == null)
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
             return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-        var info = await _authService.GetCertificateInfoAsync(userId.Value);
+        var info = await _authService.GetCertificateInfoAsync(userId);
 
         if (info == null)
-            return NotFound(new { success = false, error = "Profil firmy nie istnieje" });
+            return NotFound(new { success = false, error = "Brak informacji o certyfikacie" });
 
         return Ok(new { success = true, data = info });
     }
-
-[HttpPost("ksef/connect")]
-[Authorize]
-public async Task<IActionResult> ConnectToKsef(
-    [FromServices] IKSeFAuthService ksefAuthToken,
-    [FromServices] IKSeFCertAuthService ksefAuthCert,
-    [FromServices] KSeFSessionManager session)
-{
-    var userId = GetUserId();
-    if (userId == null)
-        return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
-
-    var user = await _authService.GetUserByIdAsync(userId.Value);
-    if (user?.Company == null)
-        return BadRequest(new { success = false, error = "Najpierw skonfiguruj firmę" });
-
-    try
+    
+    [Authorize]
+    [HttpPost("ksef/connect")]
+    public async Task<IActionResult> ConnectToKsef()
     {
-        _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-        _logger.LogInformation("  🔗 KSEF CONNECT: User {UserId}, NIP {Nip}, Method {Method}", 
-            userId, user.Company.Nip, user.Company.AuthMethod);
-        _logger.LogInformation("═══════════════════════════════════════════════════════════════");
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-        Models.Responses.AuthResult result;
+        var user = await _authService.GetUserByIdAsync(userId);
+        if (user?.Company == null)
+            return BadRequest(new { success = false, error = "Najpierw skonfiguruj firmę" });
 
-        if (user.Company.AuthMethod == "certificate")
+        var authMethod = user.Company.AuthMethod;
+        var ksefEnvironment = user.Company.KsefEnvironment;
+
+        _logger.LogInformation(
+            "🔗 Connecting to KSeF for user {UserId}, method: {Method}, environment: {Env}",
+            userId, authMethod, ksefEnvironment);
+
+        if (authMethod == "certificate")
         {
-            _logger.LogInformation("🔐 --- Pobieranie certyfikatu z bazy ---");
-            
-            var certData = await _authService.GetDecryptedCertificateAsync(userId.Value);
-            
+            var certData = await _authService.GetDecryptedCertificateAsync(userId);
             if (certData == null)
-            {
-                _logger.LogError("  ❌ Certyfikat NULL po deszyfrowaniu");
-                return BadRequest(new { 
-                    success = false, 
-                    error = "Certyfikat nie jest dostępny. Prześlij certyfikat ponownie.",
-                    tokenExpired = false
-                });
-            }
-
-            var (cert, key, passwordRaw) = certData.Value;
-
-            if (cert == null || key == null)
-            {
-                _logger.LogError("  ❌ Cert lub Key jest NULL");
-                return BadRequest(new { 
-                    success = false, 
-                    error = "Dane certyfikatu są niepełne. Prześlij certyfikat ponownie.",
-                    tokenExpired = false
-                });
-            }
-
-            // ✅ TRIM HASŁA (usunięcie spacji przed/po)
-            var password = passwordRaw?.Trim();
-            if (passwordRaw != password)
-            {
-                _logger.LogWarning("  ⚠️ Password trimmed: '{Before}' → '{After}'", 
-                    passwordRaw ?? "NULL", password ?? "NULL");
-            }
-
-            _logger.LogInformation("  ✅ Certyfikat pobrany z bazy");
-            _logger.LogDebug("    📄 Cert length: {CertLen}", cert.Length);
-            _logger.LogDebug("    🔑 Key length: {KeyLen}", key.Length);
-            _logger.LogDebug("    🔒 Has password: {HasPwd} (length: {PwdLen})", 
-                !string.IsNullOrEmpty(password), password?.Length ?? 0);
-
-            // ✅ DEBUG: Sprawdź pierwsze znaki hasła (bez ujawnienia pełnej wartości)
-            if (!string.IsNullOrEmpty(password))
-            {
-                var firstChar = (int)password[0];
-                var lastChar = (int)password[password.Length - 1];
-                _logger.LogDebug("    🔒 Password first char ASCII: {First}, last char ASCII: {Last}", 
-                    firstChar, lastChar);
-                
-                // Sprawdź czy hasło zawiera nietypowe znaki
-                var hasNonPrintable = password.Any(c => c < 32 || c > 126);
-                if (hasNonPrintable)
+                return BadRequest(new
                 {
-                    _logger.LogWarning("    ⚠️ Password contains non-printable characters!");
-                }
+                    success = false,
+                    error = "Certyfikat nie jest skonfigurowany lub jest nieprawidłowy"
+                });
+
+            var password = certData.Value.password?.Trim();
+
+            var authResult = await _ksefCertAuthService.AuthenticateWithCertificateAsync(
+                user.Company.Nip,
+                certData.Value.cert,
+                certData.Value.key,
+                password,
+                ksefEnvironment
+            );
+
+            if (!authResult.Success)
+            {
+                _logger.LogError("❌ KSeF cert auth failed for user {UserId}: {Error}",
+                    userId, authResult.Error);
+                return BadRequest(new
+                {
+                    success = false,
+                    error = authResult.Error ?? "Nie udało się połączyć z KSeF"
+                });
             }
 
-            _logger.LogInformation("🚀 --- Wywołanie KSeFCertAuthService ---");
-            
-            result = await ksefAuthCert.AuthenticateWithCertificateAsync(
-                user.Company.Nip,
-                cert,
-                key,
-                password,  // ← Trimmed password
-                HttpContext.RequestAborted);
+            _logger.LogInformation(
+                "✅ KSeF connected (certificate) for user {UserId}, environment: {Env}",
+                userId, ksefEnvironment);
+
+            return Ok(new
+            {
+                success = true,
+                message = $"Połączono z KSeF (certyfikat, środowisko: {ksefEnvironment})",
+                data = new
+                {
+                    referenceNumber = authResult.ReferenceNumber,
+                    environment = ksefEnvironment
+                }
+            });
         }
         else
         {
-            _logger.LogInformation("🔑 --- Pobieranie tokenu KSeF z bazy ---");
-            
-            var ksefToken = await _authService.GetDecryptedKsefTokenAsync(userId.Value);
-            
+            var ksefToken = await _authService.GetDecryptedKsefTokenAsync(userId);
             if (string.IsNullOrEmpty(ksefToken))
+                return BadRequest(new
+                {
+                    success = false,
+                    error = "Token KSeF nie jest skonfigurowany"
+                });
+
+            var authResult = await _ksefAuthService.LoginAsync(
+                user.Company.Nip,
+                ksefToken,
+                ksefEnvironment
+            );
+
+            if (!authResult.Success)
             {
-                _logger.LogError("  ❌ Token KSeF NULL po deszyfrowaniu");
-                return BadRequest(new { 
-                    success = false, 
-                    error = "Token KSeF nie jest skonfigurowany",
-                    tokenExpired = false
+                _logger.LogError("❌ KSeF token auth failed for user {UserId}: {Error}",
+                    userId, authResult.Error);
+                return BadRequest(new
+                {
+                    success = false,
+                    error = authResult.Error ?? "Nie udało się połączyć z KSeF"
                 });
             }
 
-            _logger.LogInformation("  ✅ Token pobrany z bazy (len={Len})", ksefToken.Length);
-            _logger.LogInformation("🚀 --- Wywołanie KSeFAuthService ---");
+            _logger.LogInformation(
+                "✅ KSeF connected (token) for user {UserId}, environment: {Env}",
+                userId, ksefEnvironment);
 
-            result = await ksefAuthToken.LoginAsync(
-                user.Company.Nip, 
-                ksefToken, 
-                HttpContext.RequestAborted);
-        }
-
-        if (!result.Success)
-        {
-            _logger.LogError("  ❌ KSeF auth failed: {Error}", result.Error);
-            
-            return BadRequest(new
+            return Ok(new
             {
-                success = false,
-                error = result.Error,
-                tokenExpired = result.Error != null && (
-                    result.Error.Contains("401") ||
-                    result.Error.Contains("token") ||
-                    result.Error.Contains("wygasł") ||
-                    result.Error.Contains("unauthorized", StringComparison.OrdinalIgnoreCase))
+                success = true,
+                message = $"Połączono z KSeF (token, środowisko: {ksefEnvironment})",
+                data = new
+                {
+                    referenceNumber = authResult.ReferenceNumber,
+                    environment = ksefEnvironment
+                }
             });
         }
-
-        _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-        _logger.LogInformation("  ✅ KSEF CONNECTED: User {UserId}, NIP {Nip}, Method {Method}",
-            userId, user.Company.Nip, user.Company.AuthMethod);
-        _logger.LogInformation("  📋 RefNumber: {Ref}", result.ReferenceNumber);
-        _logger.LogInformation("  ⏰ AccessToken valid until: {Until}", result.AccessTokenValidUntil);
-        _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-
-        return Ok(new
-        {
-            success = true,
-            message = $"Połączono z KSeF ({user.Company.AuthMethod})",
-            data = new
-            {
-                nip = user.Company.Nip,
-                authMethod = user.Company.AuthMethod,
-                referenceNumber = result.ReferenceNumber,
-                accessTokenValidUntil = result.AccessTokenValidUntil,
-                refreshTokenValidUntil = result.RefreshTokenValidUntil
-            }
-        });
     }
-    catch (Exception ex)
+    
+    [Authorize]
+    [HttpPost("ksef/disconnect")]
+    public IActionResult DisconnectFromKsef()
     {
-        _logger.LogError(ex, "❌ KSeF connection failed for user {UserId}", userId);
-        return BadRequest(new { 
-            success = false, 
-            error = "Błąd połączenia z KSeF: " + ex.Message,
-            tokenExpired = false
-        });
-    }
-}
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userIdClaim == null || !int.TryParse(userIdClaim, out var userId))
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
 
-    private int? GetUserId()
-    {
-        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
-        if (claim == null) return null;
-        if (int.TryParse(claim.Value, out var id)) return id;
-        return null;
+        _sessionManager.ClearAuthSession();
+
+        _logger.LogInformation("🔌 User {UserId} disconnected from KSeF", userId);
+
+        return Ok(new { success = true, message = "Odłączono od KSeF" });
     }
 }
