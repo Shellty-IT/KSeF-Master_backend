@@ -37,6 +37,7 @@ public interface IAuthService
     Task<AppAuthResult> LoginAsync(LoginAppRequest request);
     Task<UserInfo?> GetUserByIdAsync(int userId);
     Task<AppAuthResult> SetupCompanyAsync(int userId, CompanySetupRequest request);
+    Task<AppAuthResult> UpdateCompanyProfileAsync(int userId, UpdateCompanyProfileRequest request);
     Task<AppAuthResult> UpdateKsefTokenAsync(int userId, UpdateKsefTokenRequest request);
     Task<string?> GetDecryptedKsefTokenAsync(int userId);
 

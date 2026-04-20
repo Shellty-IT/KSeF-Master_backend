@@ -21,6 +21,12 @@ public class CompanySetupRequest
     public string KsefToken { get; set; } = string.Empty;
 }
 
+public class UpdateCompanyProfileRequest
+{
+    public string CompanyName { get; set; } = string.Empty;
+    public string Nip { get; set; } = string.Empty;
+}
+
 public class UpdateKsefTokenRequest
 {
     public string KsefToken { get; set; } = string.Empty;

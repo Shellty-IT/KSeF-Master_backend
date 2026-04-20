@@ -169,6 +169,35 @@ public class AuthService : IAuthService
         return new AppAuthResult { Success = true, User = userInfo };
     }
 
+    public async Task<AppAuthResult> UpdateCompanyProfileAsync(int userId, UpdateCompanyProfileRequest request)
+    {
+        var errors = ValidateCompanyProfile(request);
+        if (errors.Count > 0)
+            return new AppAuthResult { Success = false, Error = string.Join("; ", errors) };
+
+        var user = await _db.Users
+            .Include(u => u.CompanyProfile)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null)
+            return new AppAuthResult { Success = false, Error = "Użytkownik nie istnieje" };
+
+        if (user.CompanyProfile == null)
+            return new AppAuthResult { Success = false, Error = "Profil firmy nie istnieje. Najpierw skonfiguruj firmę." };
+
+        user.CompanyProfile.CompanyName = request.CompanyName.Trim();
+        user.CompanyProfile.Nip = request.Nip.Trim();
+        user.CompanyProfile.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("Company profile updated for user {UserId}: {CompanyName}, NIP {Nip}", 
+            userId, request.CompanyName, request.Nip);
+
+        var userInfo = MapUserInfo(user);
+        return new AppAuthResult { Success = true, User = userInfo };
+    }
+    
     public async Task<string?> GetDecryptedKsefTokenAsync(int userId)
     {
         var company = await _db.CompanyProfiles
@@ -574,6 +603,22 @@ public async Task<(byte[]? cert, byte[]? key, string? password)?> GetDecryptedCe
         return errors;
     }
 
+    private List<string> ValidateCompanyProfile(UpdateCompanyProfileRequest request)
+    {
+        var errors = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(request.CompanyName))
+            errors.Add("Nazwa firmy jest wymagana");
+
+        if (string.IsNullOrWhiteSpace(request.Nip))
+            errors.Add("NIP jest wymagany");
+        else if (request.Nip.Trim().Length != 10 || !request.Nip.Trim().All(char.IsDigit))
+            errors.Add("NIP musi mieć dokładnie 10 cyfr");
+
+        return errors;
+    }
+    
+    
     private UserInfo MapUserInfo(User user)
     {
         return new UserInfo

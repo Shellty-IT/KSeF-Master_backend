@@ -178,6 +178,29 @@ public class AuthController : ControllerBase
         });
     }
 
+    [HttpPut("company/profile")]
+    [Authorize]
+    public async Task<IActionResult> UpdateCompanyProfile([FromBody] UpdateCompanyProfileRequest request)
+    {
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { success = false, error = "Nieprawidłowy token" });
+
+        _logger.LogInformation("=== UPDATE COMPANY PROFILE: User {UserId}, NIP {Nip} ===", userId, request.Nip);
+
+        var result = await _authService.UpdateCompanyProfileAsync(userId.Value, request);
+
+        if (!result.Success)
+            return BadRequest(new { success = false, error = result.Error });
+
+        return Ok(new
+        {
+            success = true,
+            message = "Dane firmy zaktualizowane pomyślnie",
+            data = result.User
+        });
+    }
+    
     [HttpDelete("company/certificate")]
     [Authorize]
     public async Task<IActionResult> DeleteCertificate()
