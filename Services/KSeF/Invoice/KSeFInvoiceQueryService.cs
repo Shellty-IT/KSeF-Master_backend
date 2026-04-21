@@ -2,7 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using KSeF.Backend.Models.Requests;
-using KSeF.Backend.Models.Responses;
+using KSeF.Backend.Models.Responses.Invoice;
 using KSeF.Backend.Services.Interfaces;
 
 namespace KSeF.Backend.Services.KSeF.Invoice;
@@ -33,12 +33,17 @@ public class KSeFInvoiceQueryService : IKSeFInvoiceQueryService
         };
     }
 
-    public async Task<InvoiceQueryResponse> GetInvoicesAsync(InvoiceQueryRequest request, CancellationToken ct = default)
+    public async Task<InvoiceQueryResponse> QueryInvoicesAsync(
+        HttpClient client,
+        InvoiceQueryRequest request,
+        CancellationToken cancellationToken = default)
     {
-        EnsureAuthenticated();
-        await _authService.RefreshTokenIfNeededAsync(ct);
+        if (!_session.IsAuthenticated)
+            throw new UnauthorizedAccessException("Nie jesteś zalogowany do KSeF");
 
-        var client = _httpClientFactory.CreateClient("KSeF");
+        await _authService.RefreshTokenIfNeededAsync(cancellationToken);
+
+        var httpClient = _httpClientFactory.CreateClient("KSeF");
         var allInvoices = new List<InvoiceMetadata>();
         var seenIds = new HashSet<string>();
         var maxResults = request.MaxResults ?? int.MaxValue;
@@ -48,7 +53,7 @@ public class KSeFInvoiceQueryService : IKSeFInvoiceQueryService
         var hasMore = true;
         var iteration = 0;
         const int maxIterations = 200;
-        var currentFrom = request.DateRange.From.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        var currentFrom = request.DateRange!.From.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
         var currentTo = request.DateRange.To.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
 
         _logger.LogInformation(
@@ -76,11 +81,11 @@ public class KSeFInvoiceQueryService : IKSeFInvoiceQueryService
             httpRequest.Headers.Add("Authorization", $"Bearer {_session.AccessToken}");
             httpRequest.Content = new StringContent(requestBodyJson, Encoding.UTF8, "application/json");
 
-            var response = await client.SendAsync(httpRequest, ct);
-            var content = await response.Content.ReadAsStringAsync(ct);
+            var response = await httpClient.SendAsync(httpRequest, cancellationToken);
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if (!response.IsSuccessStatusCode)
-                throw new HttpRequestException($"Błąd pobierania faktur: {response.StatusCode} - {content}");
+                throw new HttpRequestException($"Query failed: {response.StatusCode} - {content}");
 
             using var doc = JsonDocument.Parse(content);
             var root = doc.RootElement;
@@ -178,11 +183,5 @@ public class KSeFInvoiceQueryService : IKSeFInvoiceQueryService
         if (DateTimeOffset.TryParse(dateString, out var dto))
             return dto.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ");
         return dateString;
-    }
-
-    private void EnsureAuthenticated()
-    {
-        if (!_session.IsAuthenticated)
-            throw new UnauthorizedAccessException("Nie jesteś zalogowany do KSeF");
     }
 }

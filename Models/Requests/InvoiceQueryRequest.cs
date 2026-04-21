@@ -1,5 +1,4 @@
-﻿// Models/Requests/InvoiceQueryRequest.cs
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace KSeF.Backend.Models.Requests;
 
@@ -31,6 +30,9 @@ public class InvoiceQueryRequest
 
     [JsonPropertyName("maxResults")]
     public int? MaxResults { get; set; }
+
+    [JsonPropertyName("pageSize")]
+    public int? PageSize { get; set; }
 
     [JsonPropertyName("sortDescending")]
     public bool SortDescending { get; set; } = true;

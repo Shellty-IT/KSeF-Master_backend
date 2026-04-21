@@ -1,23 +1,22 @@
-﻿// Mappers/UserMapper.cs
-using KSeF.Backend.Models.Data;
-using KSeF.Backend.Services.Interfaces;
+﻿using KSeF.Backend.Models.Data;
+using KSeF.Backend.Models.Responses;
 
 namespace KSeF.Backend.Mappers;
 
 public static class UserMapper
 {
-    public static UserInfo ToUserInfo(User user)
+    public static UserInfo MapToUserInfo(User user)
     {
         return new UserInfo
         {
             Id = user.Id,
             Email = user.Email,
             Name = user.Name,
-            Company = user.CompanyProfile != null ? ToCompanyInfo(user.CompanyProfile) : null
+            Company = user.CompanyProfile != null ? MapToCompanyInfo(user.CompanyProfile) : null
         };
     }
 
-    public static CompanyInfo ToCompanyInfo(CompanyProfile company)
+    private static CompanyInfo MapToCompanyInfo(CompanyProfile company)
     {
         return new CompanyInfo
         {

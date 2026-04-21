@@ -1,7 +1,7 @@
-﻿// Services/KSeF/Auth/KSeFTokenRefreshService.cs
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
-using KSeF.Backend.Models.Responses;
+using KSeF.Backend.Infrastructure.KSeF;
+using KSeF.Backend.Models.Responses.Auth;
 using KSeF.Backend.Services.Interfaces;
 
 namespace KSeF.Backend.Services.KSeF.Auth;
@@ -9,54 +9,72 @@ namespace KSeF.Backend.Services.KSeF.Auth;
 public class KSeFTokenRefreshService : IKSeFTokenRefreshService
 {
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly KSeFSessionManager _session;
+    private readonly IKSeFEnvironmentService _environmentService;
+    private readonly KSeFSessionManager _sessionManager;
     private readonly ILogger<KSeFTokenRefreshService> _logger;
-    private readonly JsonSerializerOptions _jsonOptions;
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public KSeFTokenRefreshService(
         IHttpClientFactory httpClientFactory,
-        KSeFSessionManager session,
+        IKSeFEnvironmentService environmentService,
+        KSeFSessionManager sessionManager,
         ILogger<KSeFTokenRefreshService> logger)
     {
         _httpClientFactory = httpClientFactory;
-        _session = session;
+        _environmentService = environmentService;
+        _sessionManager = sessionManager;
         _logger = logger;
-        _jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
     }
 
     public async Task<bool> RefreshTokenIfNeededAsync(CancellationToken ct = default)
     {
-        if (!_session.NeedsTokenRefresh)
-            return true;
+        if (!_sessionManager.NeedsTokenRefresh)
+            return false;
 
-        _logger.LogInformation("Odświeżanie accessToken...");
+        var refreshToken = _sessionManager.RefreshToken;
+        if (string.IsNullOrEmpty(refreshToken))
+        {
+            _logger.LogWarning("Cannot refresh token - no refresh token available");
+            return false;
+        }
 
         try
         {
             var client = _httpClientFactory.CreateClient("KSeF");
-            using var request = new HttpRequestMessage(HttpMethod.Post, "auth/token/refresh");
-            request.Headers.Add("Authorization", $"Bearer {_session.RefreshToken}");
-            request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            client.BaseAddress = new Uri(_environmentService.GetApiBaseUrl("Test"));
 
-            var response = await client.SendAsync(request, ct);
-            var content = await response.Content.ReadAsStringAsync(ct);
+            var requestBody = new { refreshToken };
+            var content = new StringContent(
+                JsonSerializer.Serialize(requestBody),
+                Encoding.UTF8,
+                "application/json");
+
+            var response = await client.PostAsync("auth/token/refresh", content, ct);
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError("Błąd refresh: {Content}", content);
+                var error = KSeFErrorParser.Parse(responseBody);
+                _logger.LogError("Token refresh failed: {Error}", error);
                 return false;
             }
 
-            var tokens = JsonSerializer.Deserialize<TokenRefreshResponse>(content, _jsonOptions);
-            if (tokens == null) return false;
+            var result = JsonSerializer.Deserialize<TokenRefreshResponse>(responseBody, JsonOptions);
 
-            _session.UpdateAccessToken(tokens);
-            _logger.LogInformation("AccessToken odświeżony do: {Until}", tokens.AccessToken?.ValidUntil);
+            if (result?.AccessToken == null)
+            {
+                _logger.LogError("Token refresh response missing accessToken");
+                return false;
+            }
+
+            _sessionManager.UpdateAccessToken(result);
+            _logger.LogInformation("Access token refreshed successfully");
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Błąd odświeżania tokena");
+            _logger.LogError(ex, "Exception during token refresh");
             return false;
         }
     }

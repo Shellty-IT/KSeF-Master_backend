@@ -1,9 +1,8 @@
-﻿// Services/Interfaces/IKSeFInvoiceStatsService.cs
-using KSeF.Backend.Models.Responses;
+﻿using KSeF.Backend.Models.Responses.Stats;
 
 namespace KSeF.Backend.Services.Interfaces;
 
 public interface IKSeFInvoiceStatsService
 {
-    Task<InvoiceStatsResponse> GetInvoiceStatsAsync(int months = 3, CancellationToken ct = default);
+    Task<InvoiceStatsResponse> GetStatsAsync(int months, CancellationToken cancellationToken = default);
 }

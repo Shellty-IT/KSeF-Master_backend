@@ -1,5 +1,4 @@
-﻿// Services/Interfaces/IKSeFTokenRefreshService.cs
-namespace KSeF.Backend.Services.Interfaces;
+﻿namespace KSeF.Backend.Services.Interfaces;
 
 public interface IKSeFTokenRefreshService
 {

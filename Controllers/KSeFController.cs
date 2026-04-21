@@ -1,6 +1,6 @@
-﻿// Controllers/KSeFController.cs
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using FluentValidation;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces;
@@ -43,21 +43,21 @@ public class KSeFController : ControllerBase
 
     [HttpPost("login")]
     [Authorize]
-    public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
+    public async Task<IActionResult> Login(
+        [FromBody] LoginRequest request,
+        [FromServices] IValidator<LoginRequest> validator,
+        CancellationToken ct)
     {
+        var validationResult = await validator.ValidateAsync(request, ct);
+        if (!validationResult.IsValid)
+            return BadRequest(new
+            {
+                success = false,
+                error = "Błędy walidacji",
+                details = validationResult.Errors.Select(e => e.ErrorMessage)
+            });
+
         _logger.LogInformation("KSeF login request for NIP: {Nip}", request.Nip);
-
-        if (string.IsNullOrWhiteSpace(request.Nip))
-            return BadRequest(new { success = false, error = "NIP jest wymagany" });
-
-        if (request.Nip.Length != 10 || !request.Nip.All(char.IsDigit))
-            return BadRequest(new { success = false, error = "NIP musi mieć dokładnie 10 cyfr" });
-
-        if (string.IsNullOrWhiteSpace(request.KsefToken))
-            return BadRequest(new { success = false, error = "Token KSeF jest wymagany" });
-
-        if (!request.KsefToken.Contains('|'))
-            return BadRequest(new { success = false, error = "Nieprawidłowy format tokenu KSeF" });
 
         try
         {
@@ -101,14 +101,22 @@ public class KSeFController : ControllerBase
 
     [HttpPost("invoices")]
     [Authorize]
-    public async Task<IActionResult> GetInvoices([FromBody] InvoiceQueryRequest request, CancellationToken ct)
+    public async Task<IActionResult> GetInvoices(
+        [FromBody] InvoiceQueryRequest request,
+        [FromServices] IValidator<InvoiceQueryRequest> validator,
+        CancellationToken ct)
     {
+        var validationResult = await validator.ValidateAsync(request, ct);
+        if (!validationResult.IsValid)
+            return BadRequest(new
+            {
+                success = false,
+                error = "Błędy walidacji zapytania",
+                details = validationResult.Errors.Select(e => e.ErrorMessage)
+            });
+
         _logger.LogInformation("GetInvoices: SubjectType={Type}, DateType={DateType}",
             request.SubjectType, request.DateRange?.DateType);
-
-        var validationErrors = ValidateInvoiceQuery(request);
-        if (validationErrors.Count > 0)
-            return BadRequest(new { success = false, error = "Błędy walidacji zapytania", details = validationErrors });
 
         try
         {
@@ -198,13 +206,21 @@ public class KSeFController : ControllerBase
 
     [HttpPost("invoice/send")]
     [Authorize]
-    public async Task<IActionResult> SendInvoice([FromBody] CreateInvoiceRequest request, CancellationToken ct)
+    public async Task<IActionResult> SendInvoice(
+        [FromBody] CreateInvoiceRequest request,
+        [FromServices] IValidator<CreateInvoiceRequest> validator,
+        CancellationToken ct)
     {
-        _logger.LogInformation("SendInvoice: {Number}", request.InvoiceNumber);
+        var validationResult = await validator.ValidateAsync(request, ct);
+        if (!validationResult.IsValid)
+            return BadRequest(new
+            {
+                success = false,
+                error = "Błędy walidacji",
+                details = validationResult.Errors.Select(e => e.ErrorMessage)
+            });
 
-        var validationErrors = ValidateInvoiceRequest(request);
-        if (validationErrors.Count > 0)
-            return BadRequest(new { success = false, error = "Błędy walidacji", details = validationErrors });
+        _logger.LogInformation("SendInvoice: {Number}", request.InvoiceNumber);
 
         try
         {
@@ -294,112 +310,5 @@ public class KSeFController : ControllerBase
     {
         var invalid = Path.GetInvalidFileNameChars();
         return string.Join("-", name.Split(invalid, StringSplitOptions.RemoveEmptyEntries));
-    }
-
-    private static List<string> ValidateInvoiceQuery(InvoiceQueryRequest request)
-    {
-        var errors = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(request.SubjectType))
-            errors.Add("SubjectType jest wymagany (Subject1 lub Subject2)");
-        else if (request.SubjectType != "Subject1" && request.SubjectType != "Subject2")
-            errors.Add("SubjectType musi być 'Subject1' (wystawione) lub 'Subject2' (odebrane)");
-
-        if (request.DateRange == null)
-        {
-            errors.Add("DateRange jest wymagany");
-            return errors;
-        }
-
-        if (request.DateRange.From == default)
-            errors.Add("DateRange.From jest wymagany");
-
-        if (request.DateRange.To == default)
-            errors.Add("DateRange.To jest wymagany");
-
-        if (request.DateRange.From > request.DateRange.To)
-            errors.Add("DateRange.From nie może być późniejszy niż DateRange.To");
-
-        if (request.DateRange.To - request.DateRange.From > TimeSpan.FromDays(366))
-            errors.Add("Zakres dat nie może przekraczać 12 miesięcy");
-
-        if (string.IsNullOrWhiteSpace(request.DateRange.DateType))
-            errors.Add("DateRange.DateType jest wymagany");
-        else
-        {
-            var validDateTypes = new[] { "InvoicingDate", "PermanentStorage", "AcquisitionTimestamp" };
-            if (!validDateTypes.Contains(request.DateRange.DateType))
-                errors.Add($"DateRange.DateType musi być jednym z: {string.Join(", ", validDateTypes)}");
-        }
-
-        if (request.AmountFrom.HasValue && request.AmountTo.HasValue && request.AmountFrom > request.AmountTo)
-            errors.Add("AmountFrom nie może być większy niż AmountTo");
-
-        if (request.MaxResults.HasValue && request.MaxResults.Value < 1)
-            errors.Add("MaxResults musi być >= 1");
-
-        return errors;
-    }
-
-    private static List<string> ValidateInvoiceRequest(CreateInvoiceRequest request)
-    {
-        var errors = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(request.InvoiceNumber))
-            errors.Add("Numer faktury jest wymagany");
-
-        if (string.IsNullOrWhiteSpace(request.IssueDate))
-            errors.Add("Data wystawienia jest wymagana");
-
-        if (string.IsNullOrWhiteSpace(request.SaleDate))
-            errors.Add("Data sprzedaży jest wymagana");
-
-        if (request.Seller == null)
-        {
-            errors.Add("Dane sprzedawcy są wymagane");
-        }
-        else
-        {
-            if (string.IsNullOrWhiteSpace(request.Seller.Nip))
-                errors.Add("NIP sprzedawcy jest wymagany");
-            if (string.IsNullOrWhiteSpace(request.Seller.Name))
-                errors.Add("Nazwa sprzedawcy jest wymagana");
-            if (string.IsNullOrWhiteSpace(request.Seller.AddressLine1))
-                errors.Add("Adres sprzedawcy jest wymagany");
-        }
-
-        if (request.Buyer == null)
-        {
-            errors.Add("Dane nabywcy są wymagane");
-        }
-        else
-        {
-            if (string.IsNullOrWhiteSpace(request.Buyer.Nip))
-                errors.Add("NIP nabywcy jest wymagany");
-            if (string.IsNullOrWhiteSpace(request.Buyer.Name))
-                errors.Add("Nazwa nabywcy jest wymagana");
-            if (string.IsNullOrWhiteSpace(request.Buyer.AddressLine1))
-                errors.Add("Adres nabywcy jest wymagany");
-        }
-
-        if (request.Items == null || request.Items.Count == 0)
-        {
-            errors.Add("Faktura musi zawierać przynajmniej jedną pozycję");
-        }
-        else
-        {
-            for (var i = 0; i < request.Items.Count; i++)
-            {
-                var item = request.Items[i];
-                if (string.IsNullOrWhiteSpace(item.Name))
-                    errors.Add($"Pozycja {i + 1}: nazwa jest wymagana");
-                if (item.Quantity <= 0)
-                    errors.Add($"Pozycja {i + 1}: ilość musi być większa od 0");
-                if (item.UnitPriceNet < 0)
-                    errors.Add($"Pozycja {i + 1}: cena nie może być ujemna");
-            }
-        }
-
-        return errors;
     }
 }

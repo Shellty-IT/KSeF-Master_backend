@@ -4,7 +4,11 @@ using KSeF.Backend.Services;
 using KSeF.Backend.Services.Auth;
 using KSeF.Backend.Services.Interfaces;
 using KSeF.Backend.Services.KSeF.Auth;
+using KSeF.Backend.Services.KSeF.Certificate;
 using KSeF.Backend.Services.KSeF.Invoice;
+using KSeF.Backend.Services.Pdf;
+using FluentValidation;
+using FluentValidation.AspNetCore;
 
 namespace KSeF.Backend.Infrastructure.Extensions;
 
@@ -17,6 +21,8 @@ public static class ServicesExtensions
         RegisterAuthServices(builder.Services);
         RegisterKSeFAuthServices(builder.Services);
         RegisterKSeFInvoiceServices(builder.Services);
+        RegisterPdfServices(builder.Services);
+        RegisterValidators(builder.Services);
         RegisterOtherServices(builder.Services);
 
         return builder;
@@ -47,12 +53,12 @@ public static class ServicesExtensions
     {
         services.AddScoped<IKSeFEnvironmentService, KSeFEnvironmentService>();
         services.AddScoped<IKSeFCryptoService, KSeFCryptoService>();
-        
+
         services.AddScoped<IKSeFChallengeService, KSeFChallengeService>();
         services.AddScoped<IKSeFAuthPollingService, KSeFAuthPollingService>();
         services.AddScoped<IKSeFAuthRedeemService, KSeFAuthRedeemService>();
         services.AddScoped<IKSeFTokenRefreshService, KSeFTokenRefreshService>();
-        
+
         services.AddScoped<IKSeFAuthService, KSeFAuthService>();
         services.AddScoped<IKSeFCertAuthService, KSeFCertAuthService>();
     }
@@ -67,9 +73,23 @@ public static class ServicesExtensions
         services.AddScoped<IKSeFInvoiceService, KSeFInvoiceFacade>();
     }
 
+    private static void RegisterPdfServices(IServiceCollection services)
+    {
+        services.AddScoped<PdfUrlBuilder>();
+        services.AddScoped<PdfQrCodeGenerator>();
+        services.AddScoped<PdfSectionRenderer>();
+        services.AddScoped<PdfDocumentComposer>();
+        services.AddScoped<IPdfGeneratorService, PdfGeneratorService>();
+    }
+
+    private static void RegisterValidators(IServiceCollection services)
+    {
+        services.AddFluentValidationAutoValidation();
+        services.AddValidatorsFromAssemblyContaining<Program>();
+    }
+
     private static void RegisterOtherServices(IServiceCollection services)
     {
         services.AddScoped<InvoiceXmlGenerator>();
-        services.AddScoped<IPdfGeneratorService, PdfGeneratorService>();
     }
 }

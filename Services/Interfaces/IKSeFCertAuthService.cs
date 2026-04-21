@@ -1,4 +1,4 @@
-﻿using KSeF.Backend.Models.Responses;
+﻿using KSeF.Backend.Models.Responses.Common;
 
 namespace KSeF.Backend.Services.Interfaces;
 
@@ -10,6 +10,5 @@ public interface IKSeFCertAuthService
         byte[] privateKeyBytes,
         string? password,
         string environment = "Test",
-        CancellationToken cancellationToken = default
-    );
+        CancellationToken cancellationToken = default);
 }
