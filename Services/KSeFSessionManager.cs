@@ -1,28 +1,31 @@
 ﻿// Services/KSeFSessionManager.cs
-using KSeF.Backend.Models.Responses;
+using KSeF.Backend.Models.Responses.Auth;
+using KSeF.Backend.Models.Responses.Certificate;
 
 namespace KSeF.Backend.Services;
 
 public class KSeFSessionManager
 {
-    private readonly object _lock = new();
+    private readonly ILogger<KSeFSessionManager> _logger;
 
-    private string? _accessToken;
-    private DateTime? _accessTokenValidUntil;
-    private string? _refreshToken;
-    private DateTime? _refreshTokenValidUntil;
     private string? _nip;
-    private string? _authMethod;
+    private string? _accessToken;
+    private DateTime? _accessTokenExpiry;
+    private string? _refreshToken;
+    private DateTime? _refreshTokenExpiry;
 
-    private string? _sessionReferenceNumber;
-    private DateTime? _sessionValidUntil;
+    private string? _onlineSessionReference;
+    private DateTime? _onlineSessionExpiry;
     private byte[]? _aesKey;
     private byte[]? _iv;
 
-    private List<CertificateInfo>? _certificates;
-    private DateTime? _certificatesCachedAt;
+    private readonly object _lock = new();
+    private List<CertificateInfo>? _cachedCertificates;
 
-    #region Auth Session
+    public KSeFSessionManager(ILogger<KSeFSessionManager> logger)
+    {
+        _logger = logger;
+    }
 
     public bool IsAuthenticated
     {
@@ -31,55 +34,50 @@ public class KSeFSessionManager
             lock (_lock)
             {
                 return !string.IsNullOrEmpty(_accessToken) &&
-                       _accessTokenValidUntil.HasValue &&
-                       _accessTokenValidUntil.Value > DateTime.UtcNow;
+                       _accessTokenExpiry.HasValue &&
+                       _accessTokenExpiry.Value > DateTime.UtcNow;
             }
         }
-    }
-
-    public string? AccessToken
-    {
-        get { lock (_lock) return _accessToken; }
-    }
-
-    public string? RefreshToken
-    {
-        get { lock (_lock) return _refreshToken; }
     }
 
     public string? Nip
     {
-        get { lock (_lock) return _nip; }
+        get { lock (_lock) { return _nip; } }
     }
 
-    public string? AuthMethod
+    public string? AccessToken
     {
-        get { lock (_lock) return _authMethod; }
+        get { lock (_lock) { return IsAuthenticated ? _accessToken : null; } }
     }
 
-    public DateTime? AccessTokenValidUntil
+    public DateTime? AccessTokenExpiry
     {
-        get { lock (_lock) return _accessTokenValidUntil; }
+        get { lock (_lock) { return _accessTokenExpiry; } }
     }
 
-    public DateTime? RefreshTokenValidUntil
+    public string? RefreshToken
     {
-        get { lock (_lock) return _refreshTokenValidUntil; }
+        get { lock (_lock) { return _refreshToken; } }
     }
 
-    public bool NeedsTokenRefresh
+    public byte[]? AesKey
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _accessTokenValidUntil.HasValue &&
-                       _accessTokenValidUntil.Value < DateTime.UtcNow.AddMinutes(2) &&
-                       !string.IsNullOrEmpty(_refreshToken) &&
-                       _refreshTokenValidUntil.HasValue &&
-                       _refreshTokenValidUntil.Value > DateTime.UtcNow;
-            }
-        }
+        get { lock (_lock) { return _aesKey; } }
+    }
+
+    public byte[]? Iv
+    {
+        get { lock (_lock) { return _iv; } }
+    }
+
+    public string? SessionReferenceNumber
+    {
+        get { lock (_lock) { return HasActiveOnlineSession ? _onlineSessionReference : null; } }
+    }
+
+    public DateTime? SessionValidUntil
+    {
+        get { lock (_lock) { return _onlineSessionExpiry; } }
     }
 
     public void SetAuthSession(string nip, TokenRedeemResponse tokens)
@@ -87,11 +85,13 @@ public class KSeFSessionManager
         lock (_lock)
         {
             _nip = nip;
-            _authMethod = "token";
             _accessToken = tokens.AccessToken?.Token;
-            _accessTokenValidUntil = tokens.AccessToken?.ValidUntil;
+            _accessTokenExpiry = tokens.AccessToken?.ValidUntil;
             _refreshToken = tokens.RefreshToken?.Token;
-            _refreshTokenValidUntil = tokens.RefreshToken?.ValidUntil;
+            _refreshTokenExpiry = tokens.RefreshToken?.ValidUntil;
+
+            _logger.LogInformation("Auth session set for NIP: {Nip}, AccessToken valid until: {Expiry}",
+                nip, _accessTokenExpiry);
         }
     }
 
@@ -100,50 +100,12 @@ public class KSeFSessionManager
         lock (_lock)
         {
             _nip = nip;
-            _authMethod = "token";
             _accessToken = status.AccessToken?.Token;
-            _accessTokenValidUntil = status.AccessToken?.ValidUntil;
+            _accessTokenExpiry = status.AccessToken?.ValidUntil;
             _refreshToken = status.RefreshToken?.Token;
-            _refreshTokenValidUntil = status.RefreshToken?.ValidUntil;
-        }
-    }
+            _refreshTokenExpiry = status.RefreshToken?.ValidUntil;
 
-    public void SetAuthSessionDirect(
-        string nip,
-        string accessToken,
-        DateTime? accessTokenValidUntil,
-        DateTime? refreshTokenValidUntil)
-    {
-        lock (_lock)
-        {
-            _nip = nip;
-            _authMethod = "token";
-            _accessToken = accessToken;
-            _accessTokenValidUntil = accessTokenValidUntil ?? DateTime.UtcNow.AddMinutes(15);
-            _refreshToken = null;
-            _refreshTokenValidUntil = refreshTokenValidUntil;
-        }
-    }
-
-    public void SetCertificateSession(string nip, string sessionToken, DateTime expiresAt)
-    {
-        lock (_lock)
-        {
-            _nip = nip;
-            _authMethod = "certificate";
-            _accessToken = sessionToken;
-            _accessTokenValidUntil = expiresAt;
-            _refreshToken = null;
-            _refreshTokenValidUntil = null;
-        }
-    }
-
-    public void UpdateAccessToken(TokenRefreshResponse tokens)
-    {
-        lock (_lock)
-        {
-            _accessToken = tokens.AccessToken?.Token;
-            _accessTokenValidUntil = tokens.AccessToken?.ValidUntil;
+            _logger.LogInformation("Auth session set from status for NIP: {Nip}", nip);
         }
     }
 
@@ -151,19 +113,48 @@ public class KSeFSessionManager
     {
         lock (_lock)
         {
-            _accessToken = null;
-            _accessTokenValidUntil = null;
-            _refreshToken = null;
-            _refreshTokenValidUntil = null;
+            var wasAuthenticated = IsAuthenticated;
+
             _nip = null;
-            _authMethod = null;
-            ClearOnlineSessionInternal();
+            _accessToken = null;
+            _accessTokenExpiry = null;
+            _refreshToken = null;
+            _refreshTokenExpiry = null;
+
+            _onlineSessionReference = null;
+            _onlineSessionExpiry = null;
+            _aesKey = null;
+            _iv = null;
+            _cachedCertificates = null;
+
+            if (wasAuthenticated)
+                _logger.LogInformation("Auth session cleared");
         }
     }
 
-    #endregion
+    public bool NeedsTokenRefresh
+    {
+        get
+        {
+            lock (_lock)
+            {
+                if (!_accessTokenExpiry.HasValue) return false;
+                var timeUntilExpiry = _accessTokenExpiry.Value - DateTime.UtcNow;
+                return timeUntilExpiry.TotalMinutes < 10;
+            }
+        }
+    }
 
-    #region Online Session
+    public void UpdateAccessToken(TokenRefreshResponse refreshResponse)
+    {
+        lock (_lock)
+        {
+            _accessToken = refreshResponse.AccessToken?.Token;
+            _accessTokenExpiry = refreshResponse.AccessToken?.ValidUntil;
+
+            _logger.LogInformation("Access token refreshed, valid until: {Expiry}", _accessTokenExpiry);
+        }
+    }
 
     public bool HasActiveOnlineSession
     {
@@ -171,43 +162,29 @@ public class KSeFSessionManager
         {
             lock (_lock)
             {
-                return !string.IsNullOrEmpty(_sessionReferenceNumber) &&
-                       _sessionValidUntil.HasValue &&
-                       _sessionValidUntil.Value > DateTime.UtcNow &&
-                       _aesKey != null &&
-                       _iv != null;
+                return !string.IsNullOrEmpty(_onlineSessionReference) &&
+                       _onlineSessionExpiry.HasValue &&
+                       _onlineSessionExpiry.Value > DateTime.UtcNow;
             }
         }
     }
 
-    public string? SessionReferenceNumber
+    public string? OnlineSessionReference
     {
-        get { lock (_lock) return _sessionReferenceNumber; }
-    }
-
-    public DateTime? SessionValidUntil
-    {
-        get { lock (_lock) return _sessionValidUntil; }
-    }
-
-    public byte[]? AesKey
-    {
-        get { lock (_lock) return _aesKey; }
-    }
-
-    public byte[]? Iv
-    {
-        get { lock (_lock) return _iv; }
+        get { lock (_lock) { return HasActiveOnlineSession ? _onlineSessionReference : null; } }
     }
 
     public void SetOnlineSession(string referenceNumber, DateTime validUntil, byte[] aesKey, byte[] iv)
     {
         lock (_lock)
         {
-            _sessionReferenceNumber = referenceNumber;
-            _sessionValidUntil = validUntil;
+            _onlineSessionReference = referenceNumber;
+            _onlineSessionExpiry = validUntil;
             _aesKey = aesKey;
             _iv = iv;
+
+            _logger.LogInformation("Online session set: {Ref}, valid until: {Expiry}",
+                referenceNumber, validUntil);
         }
     }
 
@@ -215,48 +192,16 @@ public class KSeFSessionManager
     {
         lock (_lock)
         {
-            ClearOnlineSessionInternal();
+            var hadSession = HasActiveOnlineSession;
+            _onlineSessionReference = null;
+            _onlineSessionExpiry = null;
+            _aesKey = null;
+            _iv = null;
+
+            if (hadSession)
+                _logger.LogInformation("Online session cleared");
         }
     }
-
-    private void ClearOnlineSessionInternal()
-    {
-        _sessionReferenceNumber = null;
-        _sessionValidUntil = null;
-        _aesKey = null;
-        _iv = null;
-    }
-
-    #endregion
-
-    #region Certificates Cache
-
-    public List<CertificateInfo>? GetCachedCertificates()
-    {
-        lock (_lock)
-        {
-            if (_certificates != null &&
-                _certificatesCachedAt.HasValue &&
-                _certificatesCachedAt.Value > DateTime.UtcNow.AddHours(-1))
-            {
-                return _certificates;
-            }
-            return null;
-        }
-    }
-
-    public void SetCertificates(List<CertificateInfo> certificates)
-    {
-        lock (_lock)
-        {
-            _certificates = certificates;
-            _certificatesCachedAt = DateTime.UtcNow;
-        }
-    }
-
-    #endregion
-
-    #region Session Info
 
     public object GetSessionInfo()
     {
@@ -266,15 +211,25 @@ public class KSeFSessionManager
             {
                 isAuthenticated = IsAuthenticated,
                 nip = _nip,
-                authMethod = _authMethod,
-                accessTokenValidUntil = _accessTokenValidUntil,
-                refreshTokenValidUntil = _refreshTokenValidUntil,
-                hasActiveOnlineSession = HasActiveOnlineSession,
-                sessionReferenceNumber = _sessionReferenceNumber,
-                sessionValidUntil = _sessionValidUntil
+                accessTokenExpiry = _accessTokenExpiry,
+                hasRefreshToken = !string.IsNullOrEmpty(_refreshToken),
+                hasOnlineSession = HasActiveOnlineSession,
+                onlineSessionExpiry = _onlineSessionExpiry
             };
         }
     }
 
-    #endregion
+    public List<CertificateInfo>? GetCachedCertificates()
+    {
+        lock (_lock) { return _cachedCertificates; }
+    }
+
+    public void SetCertificates(List<CertificateInfo> certificates)
+    {
+        lock (_lock)
+        {
+            _cachedCertificates = certificates;
+            _logger.LogInformation("Cached {Count} certificates", certificates.Count);
+        }
+    }
 }

@@ -1,10 +1,12 @@
-﻿// Services/Interfaces/IKSeFInvoiceQueryService.cs
-using KSeF.Backend.Models.Requests;
-using KSeF.Backend.Models.Responses;
+﻿using KSeF.Backend.Models.Requests;
+using KSeF.Backend.Models.Responses.Invoice;
 
 namespace KSeF.Backend.Services.Interfaces;
 
 public interface IKSeFInvoiceQueryService
 {
-    Task<InvoiceQueryResponse> GetInvoicesAsync(InvoiceQueryRequest request, CancellationToken ct = default);
+    Task<InvoiceQueryResponse> QueryInvoicesAsync(
+        HttpClient client,
+        InvoiceQueryRequest request,
+        CancellationToken cancellationToken = default);
 }

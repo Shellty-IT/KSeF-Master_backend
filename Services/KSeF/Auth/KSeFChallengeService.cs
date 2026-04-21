@@ -1,5 +1,4 @@
-﻿// Services/KSeF/Auth/KSeFChallengeService.cs
-using System.Text;
+﻿using System.Text;
 using System.Text.Json.Nodes;
 using KSeF.Backend.Infrastructure.KSeF;
 using KSeF.Backend.Services.Interfaces;
@@ -17,52 +16,33 @@ public class KSeFChallengeService : IKSeFChallengeService
 
     public async Task<(string challenge, long timestampMs)> GetChallengeAsync(
         HttpClient client,
-        CancellationToken ct = default)
+        CancellationToken cancellationToken = default)
     {
-        var response = await client.PostAsync(
-            "auth/challenge",
-            new StringContent("{}", Encoding.UTF8, "application/json"),
-            ct);
+        var request = new { ContextIdentifier = new { Type = "other" } };
+        var content = new StringContent(
+            System.Text.Json.JsonSerializer.Serialize(request),
+            Encoding.UTF8,
+            "application/json");
 
-        var content = await response.Content.ReadAsStringAsync(ct);
-
-        _logger.LogInformation("Challenge response: {Status} ({Code})",
-            response.StatusCode, (int)response.StatusCode);
-        _logger.LogDebug("Body: {Body}", KSeFResponseLogger.Sanitize(content));
+        var response = await client.PostAsync("auth/challenge", content, cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new KSeFApiException(
-                $"Błąd pobierania challenge: HTTP {(int)response.StatusCode} — {KSeFErrorParser.ExtractError(content, "")}",
-                response.StatusCode, content);
+            var error = KSeFErrorParser.Parse(responseBody);
+            throw new KSeFApiException($"Challenge request failed: {error}");
         }
 
-        var node = JsonNode.Parse(content);
-        var challenge = node?["challenge"]?.GetValue<string>();
+        var jsonNode = JsonNode.Parse(responseBody);
+        var challenge = jsonNode?["challenge"]?.GetValue<string>()
+                        ?? throw new InvalidOperationException("Challenge not found in response");
 
-        if (string.IsNullOrWhiteSpace(challenge))
-            throw new KSeFApiException("Brak pola 'challenge' w odpowiedzi", response.StatusCode, content);
-
+        var timestampStr = jsonNode["timestamp"]?.GetValue<string>();
         long timestampMs = 0;
-        try
+        
+        if (!string.IsNullOrEmpty(timestampStr) && DateTime.TryParse(timestampStr, out var dt))
         {
-            var tsMs = node?["timestampMs"];
-            if (tsMs != null)
-                timestampMs = tsMs.GetValue<long>();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Nie można pobrać timestampMs z JSON");
-        }
-
-        if (timestampMs == 0)
-        {
-            var timestamp = node?["timestamp"];
-            if (timestamp != null && DateTime.TryParse(timestamp.GetValue<string>(), out var parsedDate))
-            {
-                timestampMs = new DateTimeOffset(parsedDate.ToUniversalTime()).ToUnixTimeMilliseconds();
-                _logger.LogWarning("timestampMs obliczono z timestamp: {Ms}", timestampMs);
-            }
+            timestampMs = new DateTimeOffset(dt).ToUnixTimeMilliseconds();
         }
 
         return (challenge, timestampMs);

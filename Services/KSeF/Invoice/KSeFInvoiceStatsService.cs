@@ -1,6 +1,6 @@
-﻿// Services/KSeF/Invoice/KSeFInvoiceStatsService.cs
-using KSeF.Backend.Models.Requests;
-using KSeF.Backend.Models.Responses;
+﻿using KSeF.Backend.Models.Requests;
+using KSeF.Backend.Models.Responses.Invoice;
+using KSeF.Backend.Models.Responses.Stats;
 using KSeF.Backend.Services.Interfaces;
 
 namespace KSeF.Backend.Services.KSeF.Invoice;
@@ -18,74 +18,121 @@ public class KSeFInvoiceStatsService : IKSeFInvoiceStatsService
         _logger = logger;
     }
 
-    public async Task<InvoiceStatsResponse> GetInvoiceStatsAsync(int months = 3, CancellationToken ct = default)
+    public async Task<InvoiceStatsResponse> GetStatsAsync(int months, CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow;
-        var windowCount = Math.Max(1, (int)Math.Ceiling(months / 3.0));
+        var periodTo = DateTime.UtcNow.Date;
+        var periodFrom = periodTo.AddMonths(-months);
 
-        var issuedTasks = new List<Task<InvoiceQueryResponse>>();
-        var receivedTasks = new List<Task<InvoiceQueryResponse>>();
+        _logger.LogInformation("Computing stats from {From} to {To}", periodFrom, periodTo);
 
-        for (var i = 0; i < windowCount; i++)
+        var issuedRequest = new InvoiceQueryRequest
         {
-            var windowTo = now.AddMonths(-i * 3);
-            var windowFrom = now.AddMonths(-(i + 1) * 3);
+            SubjectType = "Subject1",
+            DateRange = new DateRangeFilter
+            {
+                From = periodFrom,
+                To = periodTo,
+                DateType = "InvoicingDate"
+            }
+        };
 
-            if (windowFrom < now.AddMonths(-months))
-                windowFrom = now.AddMonths(-months);
+        var receivedRequest = new InvoiceQueryRequest
+        {
+            SubjectType = "Subject2",
+            DateRange = new DateRangeFilter
+            {
+                From = periodFrom,
+                To = periodTo,
+                DateType = "InvoicingDate"
+            }
+        };
 
-            issuedTasks.Add(_queryService.GetInvoicesAsync(BuildRequest("Subject1", windowFrom, windowTo), ct));
-            receivedTasks.Add(_queryService.GetInvoicesAsync(BuildRequest("Subject2", windowFrom, windowTo), ct));
+        InvoiceQueryResponse issued;
+        InvoiceQueryResponse received;
+
+        try
+        {
+            var httpClient = new HttpClient();
+            issued = await _queryService.QueryInvoicesAsync(httpClient, issuedRequest, cancellationToken);
+            received = await _queryService.QueryInvoicesAsync(httpClient, receivedRequest, cancellationToken);
         }
-
-        await Task.WhenAll(issuedTasks.Concat(receivedTasks));
-
-        var allIssued = MergeUnique(issuedTasks);
-        var allReceived = MergeUnique(receivedTasks);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error computing stats");
+            return new InvoiceStatsResponse
+            {
+                PeriodFrom = periodFrom,
+                PeriodTo = periodTo
+            };
+        }
 
         var stats = new InvoiceStatsResponse
         {
-            IssuedCount = allIssued.Count,
-            ReceivedCount = allReceived.Count,
-            IssuedNetTotal = allIssued.Sum(i => i.NetAmount ?? 0),
-            IssuedGrossTotal = allIssued.Sum(i => i.GrossAmount ?? 0),
-            ReceivedNetTotal = allReceived.Sum(i => i.NetAmount ?? 0),
-            ReceivedGrossTotal = allReceived.Sum(i => i.GrossAmount ?? 0),
-            PeriodFrom = now.AddMonths(-months),
-            PeriodTo = now,
-            FetchedAt = DateTime.UtcNow
+            IssuedCount = issued.Invoices.Count,
+            ReceivedCount = received.Invoices.Count,
+            IssuedNetTotal = issued.Invoices.Sum(i => i.NetAmount ?? 0),
+            IssuedGrossTotal = issued.Invoices.Sum(i => i.GrossAmount ?? 0),
+            ReceivedNetTotal = received.Invoices.Sum(i => i.NetAmount ?? 0),
+            ReceivedGrossTotal = received.Invoices.Sum(i => i.GrossAmount ?? 0),
+            PeriodFrom = periodFrom,
+            PeriodTo = periodTo
         };
 
-        var allMonths = Enumerable.Range(0, months)
-            .Select(i => now.AddMonths(-i))
-            .Select(d => d.ToString("yyyy-MM"))
-            .Reverse()
-            .ToList();
+        stats.Monthly = ComputeMonthlyStats(issued, received);
+        stats.TopContractors = ComputeTopContractors(issued.Invoices.Concat(received.Invoices).ToList());
+        stats.ByCurrency = ComputeCurrencyStats(issued.Invoices.Concat(received.Invoices).ToList());
 
-        foreach (var month in allMonths)
+        return stats;
+    }
+
+    private static List<MonthlyStats> ComputeMonthlyStats(
+        InvoiceQueryResponse issued,
+        InvoiceQueryResponse received)
+    {
+        var monthlyStats = new Dictionary<string, MonthlyStats>();
+
+        foreach (var inv in issued.Invoices)
         {
-            var monthIssued = allIssued.Where(i => GetMonth(i) == month).ToList();
-            var monthReceived = allReceived.Where(i => GetMonth(i) == month).ToList();
+            if (!inv.InvoicingDate.HasValue) continue;
+            var month = inv.InvoicingDate.Value.ToString("yyyy-MM");
 
-            stats.Monthly.Add(new MonthlyStats
-            {
-                Month = month,
-                IssuedCount = monthIssued.Count,
-                ReceivedCount = monthReceived.Count,
-                IssuedGross = monthIssued.Sum(i => i.GrossAmount ?? 0),
-                ReceivedGross = monthReceived.Sum(i => i.GrossAmount ?? 0)
-            });
+            if (!monthlyStats.ContainsKey(month))
+                monthlyStats[month] = new MonthlyStats { Month = month };
+
+            monthlyStats[month].IssuedCount++;
+            monthlyStats[month].IssuedGross += inv.GrossAmount ?? 0;
         }
 
-        stats.TopContractors = allReceived
-            .Where(i => i.Seller?.Nip != null)
-            .GroupBy(i => i.Seller!.Nip!)
+        foreach (var inv in received.Invoices)
+        {
+            if (!inv.InvoicingDate.HasValue) continue;
+            var month = inv.InvoicingDate.Value.ToString("yyyy-MM");
+
+            if (!monthlyStats.ContainsKey(month))
+                monthlyStats[month] = new MonthlyStats { Month = month };
+
+            monthlyStats[month].ReceivedCount++;
+            monthlyStats[month].ReceivedGross += inv.GrossAmount ?? 0;
+        }
+
+        return monthlyStats.Values.OrderBy(m => m.Month).ToList();
+    }
+
+    private static Dictionary<string, int> ComputeTopContractors(List<InvoiceMetadata> invoices)
+    {
+        return invoices
+            .Where(i => !string.IsNullOrEmpty(i.Seller?.Name))
+            .GroupBy(i => i.Seller!.Name!)
             .OrderByDescending(g => g.Count())
             .Take(10)
             .ToDictionary(g => g.Key, g => g.Count());
+    }
 
-        stats.ByCurrency = allIssued.Concat(allReceived)
-            .GroupBy(i => i.Currency ?? "PLN")
+    private static Dictionary<string, CurrencyStats> ComputeCurrencyStats(List<InvoiceMetadata> invoices)
+    {
+        return invoices
+            .Where(i => !string.IsNullOrEmpty(i.Currency))
+            .GroupBy(i => i.Currency!)
             .ToDictionary(
                 g => g.Key,
                 g => new CurrencyStats
@@ -94,43 +141,5 @@ public class KSeFInvoiceStatsService : IKSeFInvoiceStatsService
                     NetTotal = g.Sum(i => i.NetAmount ?? 0),
                     GrossTotal = g.Sum(i => i.GrossAmount ?? 0)
                 });
-
-        return stats;
-    }
-
-    private static InvoiceQueryRequest BuildRequest(string subjectType, DateTime from, DateTime to)
-    {
-        return new InvoiceQueryRequest
-        {
-            SubjectType = subjectType,
-            DateRange = new DateRangeFilter
-            {
-                DateType = "PermanentStorage",
-                From = from,
-                To = to
-            },
-            SortDescending = false
-        };
-    }
-
-    private static List<InvoiceMetadata> MergeUnique(List<Task<InvoiceQueryResponse>> tasks)
-    {
-        var seen = new HashSet<string>();
-        var result = new List<InvoiceMetadata>();
-
-        foreach (var task in tasks)
-            foreach (var inv in task.Result.Invoices)
-                if (seen.Add(inv.KsefNumber))
-                    result.Add(inv);
-
-        return result;
-    }
-
-    private static string GetMonth(InvoiceMetadata invoice)
-    {
-        var date = invoice.InvoicingDate
-            ?? invoice.PermanentStorageDate
-            ?? (DateTime.TryParse(invoice.IssueDate, out var parsed) ? parsed : DateTime.MinValue);
-        return date.ToString("yyyy-MM");
     }
 }

@@ -2,9 +2,10 @@
 using System.Text;
 using System.Text.Json;
 using KSeF.Backend.Infrastructure.KSeF;
-using KSeF.Backend.Models.Responses;
+using KSeF.Backend.Models.Responses.Auth;
+using KSeF.Backend.Models.Responses.Certificate;
+using KSeF.Backend.Models.Responses.Common;
 using KSeF.Backend.Services.Interfaces;
-using KSeF.Backend.Services.KSeF.Auth;
 
 namespace KSeF.Backend.Services;
 
@@ -59,111 +60,55 @@ public class KSeFAuthService : IKSeFAuthService
             var apiBaseUrl = _environmentService.GetApiBaseUrl(environment);
             var client = CreateClient(apiBaseUrl);
 
-            _logger.LogInformation("  BaseAddress: {BaseAddress}", client.BaseAddress);
+            _logger.LogInformation("--- Krok 1: Pobieranie listy certyfikatów publicznych ---");
+            var certificates = await FetchPublicCertificatesAsync(client, ct);
+            _logger.LogInformation("  ✓ Pobrano {Count} certyfikatów", certificates.Count);
 
-            _logger.LogInformation("--- Krok 1: GET /security/public-key-certificates ---");
-            var certificates = await GetCertificatesAsync(client, ct);
+            _session.SetCertificates(certificates);
 
             var tokenEncryptionCert = certificates.FirstOrDefault(c =>
                 c.Usage != null && c.Usage.Any(u =>
                     u.Contains("KsefTokenEncryption", StringComparison.OrdinalIgnoreCase) ||
                     u.Contains("Encryption", StringComparison.OrdinalIgnoreCase) ||
-                    u.Contains("Token", StringComparison.OrdinalIgnoreCase)));
+                    u.Contains("Token", StringComparison.OrdinalIgnoreCase)))
+                ?? certificates.FirstOrDefault();
 
             if (tokenEncryptionCert == null)
-            {
-                _logger.LogWarning("  Nie znaleziono certyfikatu Encryption — próbuję pierwszy dostępny");
-                tokenEncryptionCert = certificates.FirstOrDefault();
-            }
+                return Fail("Brak certyfikatu do szyfrowania");
 
-            if (tokenEncryptionCert == null)
-                return Fail("Brak certyfikatów w odpowiedzi KSeF API");
-
-            _logger.LogInformation("  ✓ Certyfikat wybrany, Usage: [{Usage}]",
-                string.Join(", ", tokenEncryptionCert.Usage ?? new List<string>()));
-
-            _logger.LogInformation("--- Krok 2: POST /auth/challenge ---");
+            _logger.LogInformation("--- Krok 2: POST auth/challenge ---");
             var (challenge, timestampMs) = await _challengeService.GetChallengeAsync(client, ct);
-            _logger.LogInformation("  ✓ Challenge: {Ch}", challenge);
-            _logger.LogInformation("  ✓ Timestamp ms: {Ms}", timestampMs);
+            _logger.LogInformation("  ✓ Challenge: {Ch}, Timestamp: {Ts}", challenge, timestampMs);
 
-            _logger.LogInformation("--- Krok 3: Szyfrowanie tokenu (RSA-OAEP SHA-256) ---");
-            string encryptedToken;
-            try
-            {
-                encryptedToken = _cryptoService.EncryptToken(ksefToken, timestampMs, tokenEncryptionCert.Certificate);
-                _logger.LogInformation("  ✓ Token zaszyfrowany (Base64 len={Len})", encryptedToken.Length);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "  ✗ Błąd szyfrowania tokenu");
-                return Fail($"Błąd szyfrowania tokenu: {ex.Message}");
-            }
+            _logger.LogInformation("--- Krok 3: Szyfrowanie tokenu certyfikatem ---");
+            var encryptedToken = _cryptoService.EncryptToken(ksefToken, timestampMs, tokenEncryptionCert.Certificate);
+            _logger.LogInformation("  ✓ Token zaszyfrowany");
 
-            _logger.LogInformation("--- Krok 4: POST /auth/ksef-token ---");
-            var authTokenRequestBody = new
-            {
-                challenge,
-                contextIdentifier = new { type = "Nip", value = nip },
-                encryptedToken
-            };
+            _logger.LogInformation("--- Krok 4: POST auth/ksef-token ---");
+            var (authenticationToken, referenceNumber) = await SendAuthTokenRequestAsync(
+                client, nip, challenge, encryptedToken, ct);
+            _logger.LogInformation("  ✓ ReferenceNumber: {Ref}", referenceNumber);
 
-            var authTokenJson = JsonSerializer.Serialize(authTokenRequestBody, _jsonOptions);
-            var authTokenHttpResponse = await client.PostAsync(
-                "auth/ksef-token",
-                new StringContent(authTokenJson, Encoding.UTF8, "application/json"),
-                ct);
-
-            var authTokenContent = await authTokenHttpResponse.Content.ReadAsStringAsync(ct);
-            _logger.LogInformation("  Response status: {Status} ({Code})",
-                authTokenHttpResponse.StatusCode, (int)authTokenHttpResponse.StatusCode);
-            _logger.LogDebug("  Response body: {Body}", KSeFResponseLogger.Sanitize(authTokenContent));
-
-            if (!authTokenHttpResponse.IsSuccessStatusCode)
-            {
-                var errMsg = KSeFErrorParser.ExtractError(authTokenContent, $"HTTP {(int)authTokenHttpResponse.StatusCode}");
-                _logger.LogError("  ✗ Błąd auth/ksef-token: {Err}", errMsg);
-                return Fail(errMsg);
-            }
-
-            var authToken = JsonSerializer.Deserialize<AuthTokenResponse>(authTokenContent, _jsonOptions);
-            if (authToken == null)
-                return Fail("Nie można sparsować odpowiedzi auth/ksef-token");
-
-            var authenticationToken = authToken.AuthenticationToken?.Token;
-            var referenceNumber = authToken.ReferenceNumber;
-
-            if (string.IsNullOrEmpty(authenticationToken))
-            {
-                _logger.LogError("  ✗ Brak authenticationToken");
-                return Fail("Brak tokenu autoryzacyjnego w odpowiedzi. Sprawdź poprawność tokenu KSeF i NIP.");
-            }
-
-            _logger.LogInformation("  ✓ ReferenceNumber: {ReferenceNumber}", referenceNumber);
-
-            _logger.LogInformation("--- Krok 5: Polling ---");
-            var finalToken = await _pollingService.PollAuthStatusAsync(client, referenceNumber, authenticationToken, ct);
+            _logger.LogInformation("--- Krok 5: Polling GET auth/{Ref} ---", referenceNumber);
+            var finalToken = await _pollingService.PollAuthStatusAsync(
+                client, referenceNumber, authenticationToken, ct);
 
             if (finalToken == null)
-            {
-                _logger.LogError("  ✗ Timeout — polling nie osiągnął statusu gotowości");
-                return Fail("Timeout autoryzacji");
-            }
+                return Fail("Timeout autoryzacji — brak odpowiedzi z KSeF");
 
-            _logger.LogInformation("--- Krok 6: POST /auth/token/redeem ---");
+            _logger.LogInformation("--- Krok 6: POST auth/token/redeem ---");
             var tokens = await _redeemService.RedeemTokenAsync(client, finalToken, ct);
 
-            if (tokens?.AccessToken == null || string.IsNullOrEmpty(tokens.AccessToken.Token))
-            {
-                _logger.LogError("  ✗ Brak accessToken w redeem response");
-                return Fail("Brak accessToken w odpowiedzi token/redeem");
-            }
+            if (tokens?.AccessToken == null)
+                return Fail("Brak accessToken w odpowiedzi KSeF");
 
             _session.SetAuthSession(nip, tokens);
 
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-            _logger.LogInformation("  ✅ ZALOGOWANO POMYŚLNIE!");
+            _logger.LogInformation("  ✅ ZALOGOWANO POMYŚLNIE DO KSeF!");
             _logger.LogInformation("  AccessToken ważny do: {Until}", tokens.AccessToken.ValidUntil);
+            if (tokens.RefreshToken != null)
+                _logger.LogInformation("  RefreshToken ważny do: {Until}", tokens.RefreshToken.ValidUntil);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
             return new AuthResult
@@ -175,25 +120,10 @@ public class KSeFAuthService : IKSeFAuthService
                 RefreshTokenValidUntil = tokens.RefreshToken?.ValidUntil
             };
         }
-        catch (KSeFApiException ex)
-        {
-            _logger.LogError("Błąd API KSeF: {Message}", ex.Message);
-            return Fail(ex.Message);
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "Błąd połączenia z KSeF");
-            return Fail($"Błąd połączenia z serwerem KSeF: {ex.Message}");
-        }
-        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogError(ex, "Timeout połączenia z KSeF");
-            return Fail("Timeout — serwer KSeF nie odpowiedział w czasie");
-        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Nieoczekiwany błąd logowania do KSeF");
-            return Fail($"Nieoczekiwany błąd: {ex.Message}");
+            _logger.LogError(ex, "Login failed for NIP: {Nip}", nip);
+            return Fail(ex.Message);
         }
     }
 
@@ -203,7 +133,7 @@ public class KSeFAuthService : IKSeFAuthService
     public void Logout()
     {
         _session.ClearAuthSession();
-        _logger.LogInformation("Wylogowano — sesja wyczyszczona");
+        _logger.LogInformation("Logged out from KSeF");
     }
 
     private HttpClient CreateClient(string baseUrl)
@@ -213,31 +143,81 @@ public class KSeFAuthService : IKSeFAuthService
         return client;
     }
 
-    private async Task<List<CertificateInfo>> GetCertificatesAsync(HttpClient client, CancellationToken ct)
+    private async Task<List<CertificateInfo>> FetchPublicCertificatesAsync(
+        HttpClient client,
+        CancellationToken ct)
     {
         var cached = _session.GetCachedCertificates();
         if (cached != null)
         {
-            _logger.LogDebug("  Certyfikaty z cache ({Count} szt.)", cached.Count);
+            _logger.LogDebug("Certyfikaty z cache ({Count} szt.)", cached.Count);
             return cached;
         }
 
         var response = await client.GetAsync("security/public-key-certificates", ct);
-        var content = await response.Content.ReadAsStringAsync(ct);
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"Failed to fetch certificates: {responseBody}");
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<CertificateInfo>>(responseBody, _jsonOptions)
+                ?? new List<CertificateInfo>();
+        }
+        catch
+        {
+            var wrapper = JsonSerializer.Deserialize<CertificatesWrapper>(responseBody, _jsonOptions);
+            return wrapper?.Certificates ?? new List<CertificateInfo>();
+        }
+    }
+
+    private async Task<(string authenticationToken, string referenceNumber)> SendAuthTokenRequestAsync(
+        HttpClient client,
+        string nip,
+        string challenge,
+        string encryptedToken,
+        CancellationToken ct)
+    {
+        var requestBody = new
+        {
+            challenge,
+            contextIdentifier = new { type = "Nip", value = nip },
+            encryptedToken
+        };
+
+        var content = new StringContent(
+            JsonSerializer.Serialize(requestBody),
+            Encoding.UTF8,
+            "application/json");
+
+        var response = await client.PostAsync("auth/ksef-token", content, ct);
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+        _logger.LogInformation("  Response: {Status}", response.StatusCode);
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new KSeFApiException(
-                $"Błąd pobierania certyfikatów: {KSeFErrorParser.ExtractError(content, "")}",
-                response.StatusCode, content);
+            _logger.LogError("  Error: {Body}", KSeFResponseLogger.Sanitize(responseBody));
+            var error = KSeFErrorParser.Parse(responseBody);
+            throw new KSeFApiException($"auth/ksef-token failed: {error}");
         }
 
-        var certificates = JsonSerializer.Deserialize<List<CertificateInfo>>(content, _jsonOptions)!;
-        _session.SetCertificates(certificates);
+        var parsed = JsonSerializer.Deserialize<AuthTokenResponse>(responseBody, _jsonOptions);
+        var authToken = parsed?.AuthenticationToken?.Token;
+        var refNumber = parsed?.ReferenceNumber;
 
-        _logger.LogInformation("  ✓ Pobrano {Count} certyfikat(ów)", certificates.Count);
-        return certificates;
+        if (string.IsNullOrEmpty(authToken) || string.IsNullOrEmpty(refNumber))
+            throw new InvalidOperationException("Missing authenticationToken or referenceNumber in response");
+
+        return (authToken, refNumber);
     }
 
-    private static AuthResult Fail(string error) => new() { Success = false, Error = error };
+    private static AuthResult Fail(string error) =>
+        new() { Success = false, Error = error };
+
+    private class CertificatesWrapper
+    {
+        public List<CertificateInfo> Certificates { get; set; } = new();
+    }
 }

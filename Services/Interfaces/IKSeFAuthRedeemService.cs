@@ -1,5 +1,4 @@
-﻿// Services/Interfaces/IKSeFAuthRedeemService.cs
-using KSeF.Backend.Models.Responses;
+﻿using KSeF.Backend.Models.Responses.Auth;
 
 namespace KSeF.Backend.Services.Interfaces;
 

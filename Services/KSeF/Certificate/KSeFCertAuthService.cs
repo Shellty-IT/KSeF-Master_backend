@@ -1,4 +1,4 @@
-﻿// Services/KSeFCertAuthService.cs
+﻿// Services/KSeF/Certificate/KSeFCertAuthService.cs
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -7,11 +7,11 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using KSeF.Backend.Infrastructure.KSeF;
-using KSeF.Backend.Models.Responses;
+using KSeF.Backend.Models.Responses.Auth;
+using KSeF.Backend.Models.Responses.Common;
 using KSeF.Backend.Services.Interfaces;
-using KSeF.Backend.Services.KSeF.Auth;
 
-namespace KSeF.Backend.Services;
+namespace KSeF.Backend.Services.KSeF.Certificate;
 
 public class KSeFCertAuthService : IKSeFCertAuthService
 {
@@ -62,8 +62,7 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         try
         {
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-            _logger.LogInformation("  LOGOWANIE CERTYFIKATEM DO KSeF API v2 — NIP: {Nip}, ENV: {Env}",
-                nip, environment);
+            _logger.LogInformation("  LOGOWANIE CERTYFIKATEM DO KSeF API v2 — NIP: {Nip}, ENV: {Env}", nip, environment);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
             var apiBaseUrl = _environmentService.GetApiBaseUrl(environment);
@@ -114,12 +113,12 @@ public class KSeFCertAuthService : IKSeFCertAuthService
 
             _logger.LogInformation("  ✓ ReferenceNumber: {Ref}", referenceNumber);
 
-            _logger.LogInformation("--- Krok 6: Polling ---");
+            _logger.LogInformation("--- Krok 6: Polling GET auth/{Ref} ---", referenceNumber);
             var finalToken = await _pollingService.PollAuthStatusAsync(
                 client, referenceNumber, authenticationToken, cancellationToken);
 
             if (finalToken == null)
-                return Fail("Timeout autoryzacji");
+                return Fail("Timeout autoryzacji — użytkownik nie zatwierdził w aplikacji KSeF");
 
             _logger.LogInformation("--- Krok 7: POST auth/token/redeem ---");
             var tokens = await _redeemService.RedeemTokenAsync(client, finalToken, cancellationToken);
@@ -218,7 +217,7 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         throw new ArgumentException("Nierozpoznany format klucza");
     }
 
-    private string BuildAuthTokenRequestXml(string challenge, string nip)
+    private static string BuildAuthTokenRequestXml(string challenge, string nip)
     {
         return $@"<?xml version=""1.0"" encoding=""UTF-8""?><AuthTokenRequest xmlns=""http://ksef.mf.gov.pl/auth/token/2.0""><Challenge>{challenge}</Challenge><ContextIdentifier><Nip>{nip}</Nip></ContextIdentifier><SubjectIdentifierType>certificateSubject</SubjectIdentifierType></AuthTokenRequest>";
     }
@@ -344,7 +343,7 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         return Encoding.UTF8.GetString(ms.ToArray());
     }
 
-    private string GetSerialNumberAsDecimal(X509Certificate2 certificate)
+    private static string GetSerialNumberAsDecimal(X509Certificate2 certificate)
     {
         var serialBytes = certificate.SerialNumberBytes.ToArray();
         Array.Reverse(serialBytes);

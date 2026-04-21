@@ -1,14 +1,18 @@
-﻿// Infrastructure/KSeF/KSeFErrorParser.cs
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace KSeF.Backend.Infrastructure.KSeF;
 
 public static class KSeFErrorParser
 {
+    public static string Parse(string responseBody)
+    {
+        return ExtractError(responseBody, "Nieznany błąd KSeF");
+    }
+
     public static string ExtractError(string responseBody, string fallback)
     {
-        if (string.IsNullOrWhiteSpace(responseBody)) 
+        if (string.IsNullOrWhiteSpace(responseBody))
             return fallback;
 
         try
