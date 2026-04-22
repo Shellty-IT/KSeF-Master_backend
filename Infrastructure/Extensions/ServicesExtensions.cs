@@ -39,6 +39,7 @@ public static class ServicesExtensions
     {
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<ICompanyRepository, CompanyRepository>();
+        services.AddScoped<IInvoiceRepository, InvoiceRepository>();
     }
 
     private static void RegisterAuthServices(IServiceCollection services)

@@ -1,9 +1,11 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿// Controllers/KSeFController.cs
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using FluentValidation;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Repositories;
 
 namespace KSeF.Backend.Controllers;
 
@@ -14,17 +16,23 @@ public class KSeFController : ControllerBase
 {
     private readonly IKSeFAuthService _authService;
     private readonly IKSeFInvoiceService _invoiceService;
+    private readonly IKSeFInvoiceQueryService _queryService;
+    private readonly ICompanyRepository _companyRepository;
     private readonly KSeFSessionManager _session;
     private readonly ILogger<KSeFController> _logger;
 
     public KSeFController(
         IKSeFAuthService authService,
         IKSeFInvoiceService invoiceService,
+        IKSeFInvoiceQueryService queryService,
+        ICompanyRepository companyRepository,
         KSeFSessionManager session,
         ILogger<KSeFController> logger)
     {
         _authService = authService;
         _invoiceService = invoiceService;
+        _queryService = queryService;
+        _companyRepository = companyRepository;
         _session = session;
         _logger = logger;
     }
@@ -99,6 +107,82 @@ public class KSeFController : ControllerBase
         return Ok(new { success = true, message = "Wylogowano pomyślnie" });
     }
 
+    [HttpGet("invoices/cached")]
+    [Authorize]
+    public async Task<IActionResult> GetCachedInvoices(CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { success = false, error = "Brak autoryzacji" });
+
+        var company = await _companyRepository.GetByUserIdAsync(userId.Value);
+        if (company == null)
+            return BadRequest(new { success = false, error = "Brak skonfigurowanej firmy" });
+
+        try
+        {
+            var cached = await _queryService.GetCachedInvoicesAsync(company.Id);
+            _logger.LogInformation("GetCachedInvoices: zwrócono {Count} faktur z bazy", cached.Count);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    invoices = cached,
+                    totalCount = cached.Count,
+                    fetchedAt = DateTime.UtcNow
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetCachedInvoices error");
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
+    [HttpPost("invoices/sync")]
+    [Authorize]
+    public async Task<IActionResult> SyncInvoices(CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { success = false, error = "Brak autoryzacji" });
+
+        var company = await _companyRepository.GetByUserIdAsync(userId.Value);
+        if (company == null)
+            return BadRequest(new { success = false, error = "Brak skonfigurowanej firmy" });
+
+        _logger.LogInformation("SyncInvoices: companyProfileId={Id}, NIP={Nip}", company.Id, company.Nip);
+
+        try
+        {
+            var issued = await _invoiceService.SyncInvoicesAsync(company.Id, company.Nip, company.KsefEnvironment, "issued", ct);
+            var received = await _invoiceService.SyncInvoicesAsync(company.Id, company.Nip, company.KsefEnvironment, "received", ct);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    issued = new { newCount = issued.NewCount, totalFetched = issued.TotalFetched },
+                    received = new { newCount = received.NewCount, totalFetched = received.TotalFetched },
+                    syncedAt = DateTime.UtcNow
+                }
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { success = false, error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SyncInvoices error");
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
     [HttpPost("invoices")]
     [Authorize]
     public async Task<IActionResult> GetInvoices(
@@ -115,21 +199,30 @@ public class KSeFController : ControllerBase
                 details = validationResult.Errors.Select(e => e.ErrorMessage)
             });
 
-        _logger.LogInformation("GetInvoices: SubjectType={Type}, DateType={DateType}",
-            request.SubjectType, request.DateRange?.DateType);
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { success = false, error = "Brak autoryzacji" });
+
+        var company = await _companyRepository.GetByUserIdAsync(userId.Value);
+        if (company == null)
+            return BadRequest(new { success = false, error = "Brak skonfigurowanej firmy" });
+
+        _logger.LogInformation("GetInvoices (cache only): companyProfileId={Id}", company.Id);
 
         try
         {
-            var result = await _invoiceService.GetInvoicesAsync(request, ct);
+            var cached = await _queryService.GetCachedInvoicesAsync(company.Id);
 
-            _logger.LogInformation("GetInvoices: zwrócono {Count} faktur", result.TotalCount);
-
-            return Ok(new { success = true, data = result });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            _logger.LogWarning("GetInvoices unauthorized: {Message}", ex.Message);
-            return Unauthorized(new { success = false, error = ex.Message });
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    invoices = cached,
+                    totalCount = cached.Count,
+                    fetchedAt = DateTime.UtcNow
+                }
+            });
         }
         catch (Exception ex)
         {
@@ -304,6 +397,12 @@ public class KSeFController : ControllerBase
             _logger.LogError(ex, "GetInvoiceDetails error");
             return BadRequest(new { success = false, error = ex.Message });
         }
+    }
+
+    private int? GetUserId()
+    {
+        var claim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(claim, out var id) ? id : null;
     }
 
     private static string SanitizeFileName(string name)

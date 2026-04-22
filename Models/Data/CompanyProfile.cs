@@ -22,4 +22,6 @@ public class CompanyProfile
     public DateTime? UpdatedAt { get; set; }
     
     public User User { get; set; } = null!;
+    public ICollection<Invoice> Invoices { get; set; } = new List<Invoice>();
 }
+

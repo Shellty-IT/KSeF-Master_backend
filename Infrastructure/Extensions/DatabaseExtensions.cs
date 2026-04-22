@@ -9,10 +9,18 @@ public static class DatabaseExtensions
     public static WebApplicationBuilder AddDatabase(this WebApplicationBuilder builder)
     {
         var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-                               ?? "Data Source=ksef_master.db";
+                               ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 
         builder.Services.AddDbContext<AppDbContext>(options =>
-            options.UseSqlite(connectionString));
+        {
+            options.UseNpgsql(connectionString, npgsqlOptions =>
+            {
+                npgsqlOptions.EnableRetryOnFailure(
+                    maxRetryCount: 3,
+                    maxRetryDelay: TimeSpan.FromSeconds(5),
+                    errorCodesToAdd: null);
+            });
+        });
 
         return builder;
     }
@@ -21,8 +29,15 @@ public static class DatabaseExtensions
     {
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        db.Database.EnsureCreated();
-        app.Logger.LogInformation("Database initialized (SQLite)");
+
+        var pendingMigrations = db.Database.GetPendingMigrations().ToList();
+        if (pendingMigrations.Count > 0)
+        {
+            app.Logger.LogInformation("Applying {Count} pending migrations...", pendingMigrations.Count);
+            db.Database.Migrate();
+        }
+
+        app.Logger.LogInformation("Database initialized (PostgreSQL/Neon)");
         return app;
     }
 }
