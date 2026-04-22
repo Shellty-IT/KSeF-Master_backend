@@ -47,6 +47,19 @@ public class KSeFInvoiceFacade : IKSeFInvoiceService
         return await _queryService.QueryInvoicesAsync(client, request, ct);
     }
 
+    public async Task<InvoiceSyncResult> SyncInvoicesAsync(
+        int companyProfileId,
+        string nip,
+        string environment,
+        string direction,
+        CancellationToken ct = default)
+    {
+        if (!_sessionManager.IsAuthenticated)
+            throw new UnauthorizedAccessException("Brak aktywnej sesji KSeF");
+
+        return await _queryService.SyncInvoicesAsync(companyProfileId, nip, environment, direction, ct);
+    }
+
     public Task<InvoiceDetailsResult> GetInvoiceDetailsAsync(string ksefNumber, CancellationToken ct = default)
         => _detailsService.GetInvoiceDetailsAsync(ksefNumber, ct);
 

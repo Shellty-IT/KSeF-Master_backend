@@ -11,6 +11,7 @@ public class CompanyService : ICompanyService
 {
     private readonly IUserRepository _userRepository;
     private readonly ICompanyRepository _companyRepository;
+    private readonly IInvoiceRepository _invoiceRepository;
     private readonly ITokenEncryptionService _encryption;
     private readonly IJwtService _jwtService;
     private readonly ILogger<CompanyService> _logger;
@@ -18,12 +19,14 @@ public class CompanyService : ICompanyService
     public CompanyService(
         IUserRepository userRepository,
         ICompanyRepository companyRepository,
+        IInvoiceRepository invoiceRepository,
         ITokenEncryptionService encryption,
         IJwtService jwtService,
         ILogger<CompanyService> logger)
     {
         _userRepository = userRepository;
         _companyRepository = companyRepository;
+        _invoiceRepository = invoiceRepository;
         _encryption = encryption;
         _jwtService = jwtService;
         _logger = logger;
@@ -79,11 +82,21 @@ public class CompanyService : ICompanyService
         if (company == null)
             return Fail("Profil firmy nie istnieje. Najpierw skonfiguruj firmę.");
 
+        var nipChanged = company.Nip != request.Nip.Trim();
+
         company.CompanyName = request.CompanyName.Trim();
         company.Nip = request.Nip.Trim();
         company.UpdatedAt = DateTime.UtcNow;
 
         await _companyRepository.UpdateAsync(company);
+
+        if (nipChanged)
+        {
+            _logger.LogInformation(
+                "NIP changed for companyProfileId={CompanyProfileId} — clearing invoices",
+                company.Id);
+            await _invoiceRepository.DeleteByCompanyProfileIdAsync(company.Id);
+        }
 
         _logger.LogInformation("Company profile updated for user {UserId}: {CompanyName}, NIP {Nip}",
             userId, request.CompanyName, request.Nip);
