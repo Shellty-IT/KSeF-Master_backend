@@ -2,7 +2,8 @@
 using System.Text.Json;
 using KSeF.Backend.Infrastructure.KSeF;
 using KSeF.Backend.Models.Responses.Auth;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.KSeF;
+using KSeF.Backend.Services.KSeF.Session;
 
 namespace KSeF.Backend.Services.KSeF.Auth;
 

@@ -1,6 +1,6 @@
 ﻿// Services/Pdf/PdfGeneratorService.cs
 using KSeF.Backend.Models.Requests;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.Pdf;
 using QuestPDF.Fluent;
 using QuestPDF.Infrastructure;
 

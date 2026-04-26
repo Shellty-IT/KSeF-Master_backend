@@ -4,8 +4,9 @@ using System.Text.Json;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Models.Responses.Invoice;
 using KSeF.Backend.Repositories;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.KSeF;
 using InvoiceModel = KSeF.Backend.Models.Data.Invoice;
+using KSeF.Backend.Services.KSeF.Session;
 
 namespace KSeF.Backend.Services.KSeF.Invoice;
 

@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using KSeF.Backend.Infrastructure.KSeF;
 using KSeF.Backend.Models.Responses.Auth;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.KSeF;
 
 namespace KSeF.Backend.Services.KSeF.Auth;
 

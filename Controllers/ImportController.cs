@@ -2,7 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using KSeF.Backend.Middleware;
 using KSeF.Backend.Models.Requests;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.External;
 
 namespace KSeF.Backend.Controllers;
 

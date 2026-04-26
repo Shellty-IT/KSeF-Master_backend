@@ -1,4 +1,4 @@
-﻿using KSeF.Backend.Services.Interfaces;
+﻿using KSeF.Backend.Services.Interfaces.KSeF;
 
 namespace KSeF.Backend.Services.Pdf;
 

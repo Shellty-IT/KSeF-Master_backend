@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 using FluentValidation;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Services;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.KSeF;
+using KSeF.Backend.Services.Interfaces.Pdf;
+using KSeF.Backend.Services.KSeF.Session;
 using KSeF.Backend.Repositories;
 
 namespace KSeF.Backend.Controllers;
