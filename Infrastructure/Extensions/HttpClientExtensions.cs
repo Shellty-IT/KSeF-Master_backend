@@ -1,5 +1,6 @@
 ﻿// Infrastructure/Extensions/HttpClientExtensions.cs
-using KSeF.Backend.Services;
+using KSeF.Backend.Infrastructure.KSeF;
+
 
 namespace KSeF.Backend.Infrastructure.Extensions;
 

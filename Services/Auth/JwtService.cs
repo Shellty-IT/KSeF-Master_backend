@@ -4,7 +4,7 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
 using KSeF.Backend.Models.Data;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.Auth;
 
 namespace KSeF.Backend.Services.Auth;
 

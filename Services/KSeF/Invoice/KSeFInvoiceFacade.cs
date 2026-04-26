@@ -3,7 +3,8 @@ using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Models.Responses.Invoice;
 using KSeF.Backend.Models.Responses.Stats;
 using KSeF.Backend.Models.Responses.Common;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.KSeF;
+using KSeF.Backend.Services.KSeF.Session;
 
 namespace KSeF.Backend.Services.KSeF.Invoice;
 

@@ -1,14 +1,20 @@
 ﻿// Infrastructure/Extensions/ServicesExtensions.cs
 using KSeF.Backend.Repositories;
-using KSeF.Backend.Services;
 using KSeF.Backend.Services.Auth;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.External;
+using KSeF.Backend.Services.Invoice;
+using KSeF.Backend.Services.KSeF.Session;
+using KSeF.Backend.Services.Interfaces.Auth;
+using KSeF.Backend.Services.Interfaces.External;
+using KSeF.Backend.Services.Interfaces.KSeF;
+using KSeF.Backend.Services.Interfaces.Pdf;
 using KSeF.Backend.Services.KSeF.Auth;
 using KSeF.Backend.Services.KSeF.Certificate;
 using KSeF.Backend.Services.KSeF.Invoice;
 using KSeF.Backend.Services.Pdf;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using KSeF.Backend.Services.KSeF.Common;
 
 namespace KSeF.Backend.Infrastructure.Extensions;
 

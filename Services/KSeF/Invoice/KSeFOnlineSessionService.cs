@@ -5,7 +5,8 @@ using KSeF.Backend.Infrastructure.KSeF;
 using KSeF.Backend.Models.Responses.Common;
 using KSeF.Backend.Models.Responses.Certificate;
 using KSeF.Backend.Models.Responses.Session;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.KSeF;
+using KSeF.Backend.Services.KSeF.Session;
 
 namespace KSeF.Backend.Services.KSeF.Invoice;
 

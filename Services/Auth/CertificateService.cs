@@ -4,7 +4,7 @@ using System.Text;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Models.Responses;
 using KSeF.Backend.Repositories;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.Auth;
 
 namespace KSeF.Backend.Services.Auth;
 

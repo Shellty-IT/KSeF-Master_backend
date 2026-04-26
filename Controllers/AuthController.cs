@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Services;
-using KSeF.Backend.Services.Interfaces;
+using KSeF.Backend.Services.Interfaces.Auth;
+using KSeF.Backend.Services.Interfaces.KSeF;
+using KSeF.Backend.Services.KSeF.Session;
 
 namespace KSeF.Backend.Controllers;
 
