@@ -1,4 +1,4 @@
-﻿// Models/Data/Invoice.cs
+﻿// BACKEND: Models/Data/Invoice.cs
 namespace KSeF.Backend.Models.Data;
 
 public class Invoice
@@ -29,6 +29,8 @@ public class Invoice
 
     public string? XmlContent { get; set; }
     public string KsefEnvironment { get; set; } = "Test";
+
+    public string? InvoiceHash { get; set; }
 
     public CompanyProfile CompanyProfile { get; set; } = null!;
 }

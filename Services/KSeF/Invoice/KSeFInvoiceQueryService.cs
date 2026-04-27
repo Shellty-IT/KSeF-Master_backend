@@ -1,4 +1,4 @@
-﻿// Services/KSeF/Invoice/KSeFInvoiceQueryService.cs
+﻿// BACKEND: Services/KSeF/Invoice/KSeFInvoiceQueryService.cs
 using System.Text;
 using System.Text.Json;
 using KSeF.Backend.Models.Requests;
@@ -309,7 +309,8 @@ public class KSeFInvoiceQueryService : IKSeFInvoiceQueryService
             InvoiceDate = ToUtc(metadata.InvoicingDate ?? metadata.PermanentStorageDate),
             AcquisitionTimestamp = ToUtc(metadata.AcquisitionDate) ?? DateTime.UtcNow,
             SyncedAt = DateTime.UtcNow,
-            KsefEnvironment = environment
+            KsefEnvironment = environment,
+            InvoiceHash = metadata.InvoiceHash
         };
     }
 
