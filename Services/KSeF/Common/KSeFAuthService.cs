@@ -55,7 +55,7 @@ public class KSeFAuthService : IKSeFAuthService
         try
         {
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-            _logger.LogInformation("  LOGOWANIE DO KSeF API v2 — NIP: {Nip}, ENV: {Env}", nip, environment);
+            _logger.LogInformation("  LOGOWANIE DO KSeF API v2 - NIP: {Nip}, ENV: {Env}", nip, environment);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
             var apiBaseUrl = _environmentService.GetApiBaseUrl(environment);
@@ -95,7 +95,7 @@ public class KSeFAuthService : IKSeFAuthService
                 client, referenceNumber, authenticationToken, ct);
 
             if (finalToken == null)
-                return Fail("Timeout autoryzacji — brak odpowiedzi z KSeF");
+                return Fail("Timeout autoryzacji - brak odpowiedzi z KSeF");
 
             _logger.LogInformation("--- Krok 6: POST auth/token/redeem ---");
             var tokens = await _redeemService.RedeemTokenAsync(client, finalToken, ct);

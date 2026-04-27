@@ -55,7 +55,7 @@ public class KSeFAuthPollingService : IKSeFAuthPollingService
 
             if (status?.Status?.Code == 200)
             {
-                _logger.LogInformation("✓ Status 200 — gotowy do redeem po {Attempt} próbach", attempt);
+                _logger.LogInformation("✓ Status 200 - gotowy do redeem po {Attempt} próbach", attempt);
                 return authenticationToken;
             }
 

@@ -93,7 +93,7 @@ public class InvoiceXmlGenerator
                 xml.AppendLine($"      <AdresL2>{EscapeXml(buyer.AddressLine2)}</AdresL2>");
             xml.AppendLine("    </Adres>");
         }
-        // FA(3) — JST i GV są wymagane w Podmiot2
+        // FA(3) - JST i GV są wymagane w Podmiot2
         xml.AppendLine("    <JST>2</JST>");
         xml.AppendLine("    <GV>2</GV>");
         xml.AppendLine("  </Podmiot2>");

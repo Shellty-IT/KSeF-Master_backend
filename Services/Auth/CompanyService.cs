@@ -93,7 +93,7 @@ public class CompanyService : ICompanyService
         if (nipChanged)
         {
             _logger.LogInformation(
-                "NIP changed for companyProfileId={CompanyProfileId} — clearing invoices",
+                "NIP changed for companyProfileId={CompanyProfileId} - clearing invoices",
                 company.Id);
             await _invoiceRepository.DeleteByCompanyProfileIdAsync(company.Id);
         }

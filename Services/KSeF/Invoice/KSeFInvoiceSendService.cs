@@ -59,7 +59,7 @@ public class KSeFInvoiceSendService : IKSeFInvoiceSendService
 
         if (!_session.HasActiveOnlineSession)
         {
-            _logger.LogInformation("Brak aktywnej sesji wysyłkowej — otwieram automatycznie");
+            _logger.LogInformation("Brak aktywnej sesji wysyłkowej - otwieram automatycznie");
             var sessionResult = await _sessionService.OpenOnlineSessionAsync(cancellationToken);
             if (!sessionResult.Success)
                 return Fail($"Nie można otworzyć sesji wysyłkowej: {sessionResult.Error}");

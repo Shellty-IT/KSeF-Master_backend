@@ -231,13 +231,13 @@ public async Task<SessionUpoResult> CloseSessionAndFetchUpoAsync(CancellationTok
         
         if (statusCode == 440)
         {
-            _logger.LogWarning("Sesja {Ref} anulowana (kod 440) — UPO niedostępne", referenceNumber);
+            _logger.LogWarning("Sesja {Ref} anulowana (kod 440) - UPO niedostępne", referenceNumber);
             return new SessionUpoResult
             {
                 Success = true,
                 SessionReferenceNumber = referenceNumber,
                 UpoAvailable = false,
-                Message = "Sesja zamknięta, ale UPO niedostępne — sesja została anulowana przez KSeF."
+                Message = "Sesja zamknięta, ale UPO niedostępne - sesja została anulowana przez KSeF."
             };
         }
 
@@ -251,7 +251,7 @@ public async Task<SessionUpoResult> CloseSessionAndFetchUpoAsync(CancellationTok
         Success = true,
         SessionReferenceNumber = referenceNumber,
         UpoAvailable = false,
-        Message = "Sesja zamknięta. UPO nie było gotowe w ciągu 60 sekund — spróbuj pobrać je później."
+        Message = "Sesja zamknięta. UPO nie było gotowe w ciągu 60 sekund - spróbuj pobrać je później."
     };
 }
 
@@ -315,7 +315,7 @@ private async Task<(string? upoRef, string? downloadUrl, int statusCode)> FetchS
     {
         try
         {
-            // downloadUrl jest pre-signed (Azure Blob Storage) — nie wymaga Authorization
+            // downloadUrl jest pre-signed (Azure Blob Storage) - nie wymaga Authorization
             var client = _httpClientFactory.CreateClient();
             var response = await client.GetAsync(downloadUrl, ct);
             var body = await response.Content.ReadAsStringAsync(ct);

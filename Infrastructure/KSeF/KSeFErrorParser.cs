@@ -27,7 +27,7 @@ public static class KSeFErrorParser
                 var desc = first?["exceptionDescription"]?.GetValue<string>();
                 var details = first?["details"] as JsonArray;
                 var detailStr = details?.Count > 0
-                    ? " — " + string.Join("; ", details.Select(d => d?.GetValue<string>() ?? ""))
+                    ? " - " + string.Join("; ", details.Select(d => d?.GetValue<string>() ?? ""))
                     : "";
                 if (!string.IsNullOrEmpty(desc))
                     return desc + detailStr;

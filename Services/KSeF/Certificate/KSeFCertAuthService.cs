@@ -63,7 +63,7 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         try
         {
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
-            _logger.LogInformation("  LOGOWANIE CERTYFIKATEM DO KSeF API v2 — NIP: {Nip}, ENV: {Env}", nip, environment);
+            _logger.LogInformation("  LOGOWANIE CERTYFIKATEM DO KSeF API v2 - NIP: {Nip}, ENV: {Env}", nip, environment);
             _logger.LogInformation("═══════════════════════════════════════════════════════════════");
 
             var apiBaseUrl = _environmentService.GetApiBaseUrl(environment);
@@ -119,7 +119,7 @@ public class KSeFCertAuthService : IKSeFCertAuthService
                 client, referenceNumber, authenticationToken, cancellationToken);
 
             if (finalToken == null)
-                return Fail("Timeout autoryzacji — użytkownik nie zatwierdził w aplikacji KSeF");
+                return Fail("Timeout autoryzacji - użytkownik nie zatwierdził w aplikacji KSeF");
 
             _logger.LogInformation("--- Krok 7: POST auth/token/redeem ---");
             var tokens = await _redeemService.RedeemTokenAsync(client, finalToken, cancellationToken);
@@ -200,7 +200,7 @@ public class KSeFCertAuthService : IKSeFCertAuthService
         if (isEncrypted)
         {
             if (string.IsNullOrWhiteSpace(password))
-                throw new ArgumentException("Klucz zaszyfrowany — wymagane hasło");
+                throw new ArgumentException("Klucz zaszyfrowany - wymagane hasło");
 
             try
             {
