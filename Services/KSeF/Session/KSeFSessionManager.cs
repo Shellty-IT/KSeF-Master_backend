@@ -232,4 +232,9 @@ public class KSeFSessionManager
             _logger.LogInformation("Cached {Count} certificates", certificates.Count);
         }
     }
+    
+    public string? GetRawSessionReferenceNumber()
+    {
+        lock (_lock) { return _onlineSessionReference; }
+    }
 }

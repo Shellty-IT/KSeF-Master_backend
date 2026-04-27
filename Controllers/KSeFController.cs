@@ -1,4 +1,4 @@
-﻿// Controllers/KSeFController.cs
+﻿// BACKEND: Controllers/KSeFController.cs
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using FluentValidation;
@@ -6,6 +6,7 @@ using KSeF.Backend.Models.Requests;
 using KSeF.Backend.Services;
 using KSeF.Backend.Services.Interfaces.KSeF;
 using KSeF.Backend.Services.Interfaces.Pdf;
+using KSeF.Backend.Services.KSeF.Invoice;
 using KSeF.Backend.Services.KSeF.Session;
 using KSeF.Backend.Repositories;
 
@@ -19,6 +20,7 @@ public class KSeFController : ControllerBase
     private readonly IKSeFAuthService _authService;
     private readonly IKSeFInvoiceService _invoiceService;
     private readonly IKSeFInvoiceQueryService _queryService;
+    private readonly IKSeFOnlineSessionService _onlineSessionService;
     private readonly ICompanyRepository _companyRepository;
     private readonly KSeFSessionManager _session;
     private readonly ILogger<KSeFController> _logger;
@@ -27,6 +29,7 @@ public class KSeFController : ControllerBase
         IKSeFAuthService authService,
         IKSeFInvoiceService invoiceService,
         IKSeFInvoiceQueryService queryService,
+        IKSeFOnlineSessionService onlineSessionService,
         ICompanyRepository companyRepository,
         KSeFSessionManager session,
         ILogger<KSeFController> logger)
@@ -34,6 +37,7 @@ public class KSeFController : ControllerBase
         _authService = authService;
         _invoiceService = invoiceService;
         _queryService = queryService;
+        _onlineSessionService = onlineSessionService;
         _companyRepository = companyRepository;
         _session = session;
         _logger = logger;
@@ -293,10 +297,90 @@ public class KSeFController : ControllerBase
 
     [HttpPost("session/close")]
     [Authorize]
-    public IActionResult CloseSession()
+    public async Task<IActionResult> CloseSession(CancellationToken ct)
     {
-        _session.ClearOnlineSession();
-        return Ok(new { success = true, message = "Sesja wysyłkowa zamknięta" });
+        var rawRef = _session.GetRawSessionReferenceNumber();
+
+        _logger.LogInformation(
+            "CloseSession: RawRef={Ref}, IsAuthenticated={Auth}, Token={Token}",
+            rawRef ?? "(null)",
+            _session.IsAuthenticated,
+            string.IsNullOrEmpty(_session.AccessToken) ? "(brak)" : _session.AccessToken[..Math.Min(20, _session.AccessToken.Length)] + "...");
+
+        try
+        {
+            var result = await _onlineSessionService.CloseOnlineSessionAsync(ct);
+
+            if (!result.Success)
+                return BadRequest(new { success = false, error = result.Error });
+
+            return Ok(new
+            {
+                success = true,
+                message = "Sesja wysyłkowa zamknięta",
+                data = new { closedReferenceNumber = result.SessionReferenceNumber }
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { success = false, error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CloseSession error");
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
+    [HttpPost("session/close-and-upo")]
+    [Authorize]
+    public async Task<IActionResult> CloseSessionAndGetUpo(CancellationToken ct)
+    {
+        var rawRef = _session.GetRawSessionReferenceNumber();
+
+        _logger.LogInformation(
+            "CloseSessionAndGetUpo: RawRef={Ref}, IsAuthenticated={Auth}",
+            rawRef ?? "(null)",
+            _session.IsAuthenticated);
+
+        if (string.IsNullOrEmpty(rawRef))
+        {
+            return BadRequest(new
+            {
+                success = false,
+                error = "Brak aktywnej sesji online. Wyślij fakturę przed pobraniem UPO."
+            });
+        }
+
+        try
+        {
+            var result = await _onlineSessionService.CloseSessionAndFetchUpoAsync(ct);
+
+            if (!result.Success)
+                return BadRequest(new { success = false, error = result.Error });
+
+            return Ok(new
+            {
+                success = true,
+                message = result.Message,
+                data = new
+                {
+                    sessionReferenceNumber = result.SessionReferenceNumber,
+                    upoAvailable = result.UpoAvailable,
+                    upoReferenceNumber = result.UpoReferenceNumber,
+                    upoXml = result.UpoXml
+                }
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { success = false, error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CloseSessionAndGetUpo error");
+            return BadRequest(new { success = false, error = ex.Message });
+        }
     }
 
     [HttpPost("invoice/send")]
